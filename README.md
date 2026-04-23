@@ -1,8 +1,8 @@
-# WearOS Media Controller — App Spec
+# WearOS Media Controller
 
 ## Overview
 
-A Wear OS app that surfaces transport controls (play/pause, skip, previous, seek, volume) for whatever media session is active on the paired Android phone. No dependency on any specific app — works with Spotify, YouTube Music, Podcasts, VLC, or anything that publishes a proper `MediaSession`.
+A Wear OS app that surfaces transport controls for whatever media session is active on the paired Android phone. The current repository contains a working MVP: phone-side media session discovery, watch-side state mirroring, and core play/pause/previous/next controls over the Wearable Data Layer.
 
 ---
 
@@ -13,6 +13,22 @@ A Wear OS app that surfaces transport controls (play/pause, skip, previous, seek
 - Minimal UI: round-watch-native, glanceable, one-handed operable
 - Local dev build + ADB deploy workflow (no Play Store required)
 
+## MVP Status
+
+Implemented in this repo today:
+- Root Gradle project with `:phone` and `:wear` modules
+- Phone-side `NotificationListenerService` that picks the active `MediaController`
+- Wearable Data Layer sync for metadata, playback state, position, and actions
+- Wear player screen with loading, permission-needed, no-session, disconnected, and active-player states
+- Core commands: play/pause toggle, previous, next
+
+Planned follow-up work:
+- Seek support
+- Session picker / pinning
+- Album art sync
+- Volume controls
+- Native on-watch `MediaBrowser` fallback
+
 ---
 
 ## Target Environment
@@ -22,7 +38,8 @@ A Wear OS app that surfaces transport controls (play/pause, skip, previous, seek
 | Wear OS version | 3.x (API 30+) |
 | Companion phone | Android 8.0+ (API 26+) |
 | Language | Kotlin |
-| Build system | Gradle (AGP 8.x) |
+| Build system | Gradle 8.7 + AGP 8.5.2 |
+| JDK | 17 |
 | Min SDK | 30 |
 | Target SDK | 34 |
 
@@ -60,21 +77,18 @@ The cleanest approach for Wear OS 3 is a **hybrid**:
 ### 1. `:phone` — Companion service (runs on phone)
 
 **`MediaSessionListenerService`**
-- Extends `Service`, started by the watch via `ChannelClient` or auto-started as a foreground service
+- Extends `NotificationListenerService`
 - Uses `MediaSessionManager.getActiveSessions()` — requires `MEDIA_CONTENT_CONTROL` (via `NotificationListenerService`) or `NOTIFICATION_LISTENER_SERVICE` permission
 - Subscribes to `MediaSessionManager.OnActiveSessionsChangedListener`
 - Picks the "best" session (first active, or last-used heuristic)
 - Forwards to watch:
-  - Track title, artist, album, duration
+  - Track title, artist, app name, duration
   - Playback state (playing/paused/buffering/stopped)
-  - Current position (polled every 500ms while playing)
-  - Album art (resized to 100×100px before sending)
+  - Current position (polled every 1000ms while playing)
   - Available actions bitmask
 - Receives commands from watch and calls `MediaController.TransportControls`:
   - `play()`, `pause()`, `skipToNext()`, `skipToPrevious()`
-  - `seekTo(pos: Long)`
-  - `setRating()` (optional)
-  - `adjustVolume()` via `AudioManager`
+  - `seekTo(pos: Long)` and volume are deferred until after MVP
 
 **`WatchMessageReceiver`**
 - Listens on `/media/command` message path
@@ -84,7 +98,7 @@ The cleanest approach for Wear OS 3 is a **hybrid**:
 
 **`MainActivity`**
 - Single `ComponentActivity` with Compose for Wear
-- Hosts `NavHost` with two destinations: `PlayerScreen` and `SessionPickerScreen`
+- Hosts the MVP `PlayerScreen`
 
 **`MediaControlViewModel`**
 - Sends commands to phone via `MessageClient.sendMessage("/media/command", ...)`
@@ -94,13 +108,14 @@ The cleanest approach for Wear OS 3 is a **hybrid**:
   data class PlayerUiState(
     val title: String,
     val artist: String,
-    val albumArtBitmap: Bitmap?,
+    val appName: String,
     val isPlaying: Boolean,
     val duration: Long,
     val position: Long,
     val availableActions: Long,
-    val appName: String,
-    val sessionCount: Int
+    val isPhoneReachable: Boolean,
+    val hasLoadedState: Boolean,
+    val connectionStatus: MediaConnectionStatus?
   )
   ```
 
@@ -108,8 +123,7 @@ The cleanest approach for Wear OS 3 is a **hybrid**:
 See UI spec below.
 
 **`SessionPickerScreen`**  
-- List of active session names when multiple apps are playing
-- Allows manually pinning a session
+- Not implemented in the MVP yet
 
 ---
 
@@ -117,8 +131,7 @@ See UI spec below.
 
 ### Phone app (`AndroidManifest.xml`)
 ```xml
-<uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
-<!-- Granted via Notification Listener, not normal runtime grant -->
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
 <service
   android:name=".MediaSessionListenerService"
@@ -193,46 +206,54 @@ State synced via `DataClient` at path `/media/state` as a serialized protobuf or
 
 ```json
 {
+  "connectionStatus": "READY",
   "title": "Fluorescent Adolescent",
   "artist": "Arctic Monkeys",
-  "album": "Suck It and See",
   "appName": "Spotify",
   "isPlaying": true,
   "duration": 178000,
   "position": 34500,
-  "actions": 63,
-  "artKey": "asset://media_art"
+  "actions": 63
 }
 ```
 
-Album art sent separately as a `DataItem` asset to avoid size limits on the state blob.
+The MVP keeps the state blob JSON-only for speed of iteration. Album art is still planned as a follow-up.
 
 ---
 
 ## Project Structure
 
-```
-wearos-media-controller/
-├── build.gradle.kts              (root)
+```text
+zyx-media-controller/
+├── build.gradle.kts
+├── gradle.properties
+├── gradlew
+├── gradle/wrapper/
 ├── settings.gradle.kts
 ├── phone/
 │   ├── build.gradle.kts
 │   └── src/main/
 │       ├── AndroidManifest.xml
-│       └── kotlin/…/
-│           ├── MediaSessionListenerService.kt
-│           ├── WatchMessageReceiver.kt
-│           └── OnboardingActivity.kt
+│       ├── java/com/zyx/mediacontroller/phone/
+│       │   ├── MediaControllerRegistry.kt
+│       │   ├── MediaProtocol.kt
+│       │   ├── MediaSessionListenerService.kt
+│       │   ├── MediaStatePublisher.kt
+│       │   ├── NotificationAccess.kt
+│       │   ├── OnboardingActivity.kt
+│       │   └── WatchMessageReceiver.kt
+│       └── res/values/strings.xml
 └── wear/
     ├── build.gradle.kts
     └── src/main/
         ├── AndroidManifest.xml
-        └── kotlin/…/
-            ├── MainActivity.kt
-            ├── PlayerScreen.kt
-            ├── SessionPickerScreen.kt
-            ├── MediaControlViewModel.kt
-            └── WearDataListener.kt
+        ├── java/com/zyx/mediacontroller/wear/
+        │   ├── MainActivity.kt
+        │   ├── MediaControlViewModel.kt
+        │   ├── MediaProtocol.kt
+        │   ├── PlayerScreen.kt
+        │   └── WearDataListener.kt
+        └── res/values/strings.xml
 ```
 
 ---
@@ -241,21 +262,18 @@ wearos-media-controller/
 
 ```kotlin
 // Wear OS Compose
-implementation("androidx.wear.compose:compose-material:1.3.x")
-implementation("androidx.wear.compose:compose-navigation:1.3.x")
-implementation("androidx.wear.compose:compose-foundation:1.3.x")
+implementation("androidx.wear.compose:compose-material:1.3.1")
+implementation("androidx.wear.compose:compose-navigation:1.3.1")
+implementation("androidx.wear.compose:compose-foundation:1.3.1")
 
 // Wearable Data Layer
-implementation("com.google.android.gms:play-services-wearable:18.x")
+implementation("com.google.android.gms:play-services-wearable:18.2.0")
 
 // Media (both modules)
-implementation("androidx.media:media:1.7.x")
+implementation("androidx.media:media:1.7.0")
 
-// Coroutines
-implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.x")
-
-// Coil for image (watch side)
-implementation("io.coil-kt:coil-compose:2.x")
+// Compose compiler / Kotlin
+// Kotlin 1.9.24 + Compose compiler extension 1.5.14
 ```
 
 ---
@@ -280,6 +298,8 @@ adb devices   # confirm watch is listed
 
 ### Build & deploy
 ```bash
+export JAVA_HOME="$(/usr/libexec/java_home -v 17)"
+
 # Deploy phone companion
 ./gradlew :phone:installDebug
 
