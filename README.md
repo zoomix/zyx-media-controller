@@ -4,6 +4,19 @@
 
 A Wear OS app that surfaces transport controls for whatever media session is active on the paired Android phone. The current repository contains a working MVP: phone-side media session discovery, watch-side state mirroring, and core play/pause/previous/next controls over the Wearable Data Layer.
 
+## Quick Test Steps
+
+0. `export JAVA_HOME="$("/usr/libexec/java_home" -v 17)"`
+1. Install both debug apps: `./gradlew :phone:installDebug :wear:installDebug`
+2. On the phone, open the `Media Controller Phone` app.
+3. On the phone, tap the Notification Access button and enable access for the app in Android Settings.
+4. Return to the phone app and confirm it reports that the bridge is ready.
+5. On the watch, open the `Media Controller Wear` app while the phone is nearby and paired.
+6. Start playback in any media app on the phone, such as Spotify, YouTube Music, or VLC.
+7. Wait a moment for the watch to move from `Connecting` or `Nothing playing` into the active player view.
+8. On the watch, test `Play/Pause`, `Prev`, and `Next`, and confirm the phone's media app responds.
+9. If the watch shows `Permission needed`, re-check Notification Access on the phone. If it shows `Phone disconnected`, bring the phone closer, reopen the phone app once, and refresh the watch screen.
+
 ---
 
 ## Goals
