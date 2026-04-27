@@ -8,7 +8,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.zyx.mediacontroller.phone"
+        applicationId = "com.zyx.mediacontroller"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

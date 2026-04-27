@@ -1,7 +1,6 @@
 package com.zyx.mediacontroller.wear
 
 import android.app.Application
-import android.media.session.PlaybackState
 import androidx.lifecycle.AndroidViewModel
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -99,21 +98,16 @@ class MediaControlViewModel(application: Application) : AndroidViewModel(applica
         super.onCleared()
     }
 
-    fun canSkipPrevious(): Boolean = canRunAction(PlaybackState.ACTION_SKIP_TO_PREVIOUS)
+    fun canSkipPrevious(): Boolean = hasReadySession()
 
-    fun canSkipNext(): Boolean = canRunAction(PlaybackState.ACTION_SKIP_TO_NEXT)
+    fun canSkipNext(): Boolean = hasReadySession()
 
-    fun canTogglePlayback(): Boolean {
-        val requiredAction = if (_uiState.value.isPlaying) {
-            PlaybackState.ACTION_PAUSE
-        } else {
-            PlaybackState.ACTION_PLAY
-        }
-        return canRunAction(requiredAction)
-    }
+    fun canTogglePlayback(): Boolean = hasReadySession()
 
-    private fun canRunAction(action: Long): Boolean {
-        val availableActions = _uiState.value.availableActions
-        return availableActions == 0L || availableActions and action != 0L
+    private fun hasReadySession(): Boolean {
+        val state = _uiState.value
+        return state.isPhoneReachable &&
+            state.hasLoadedState &&
+            state.connectionStatus == MediaConnectionStatus.READY
     }
 }
