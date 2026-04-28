@@ -16,6 +16,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -77,6 +79,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -525,7 +529,7 @@ private fun HomeScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.Center,
+        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Top),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         PermissionCard(uiState.notificationAccessEnabled, onOpenSettings)
@@ -592,13 +596,22 @@ private fun NowPlayingCard(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            ArtworkHeader(
-                uiState = uiState,
-                onTogglePlayback = onTogglePlayback,
-                onSkipPrevious = onSkipPrevious,
-                onSkipNext = onSkipNext,
-                onSelectSession = onSelectSession,
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                ArtworkHeader(
+                    uiState = uiState,
+                    onTogglePlayback = onTogglePlayback,
+                    onSkipPrevious = onSkipPrevious,
+                    onSkipNext = onSkipNext,
+                    onSelectSession = onSelectSession,
+                )
+                if (uiState.hasSession && uiState.sessionCount > 1) {
+                    SessionSwipePageDots(
+                        selectedIndexOneBased = uiState.selectedSessionIndex,
+                        pageCount = uiState.sessionCount,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            }
             Text(
                 text = if (uiState.hasSession) uiState.title.ifBlank { "Unknown track" } else "Nothing playing",
                 style = MaterialTheme.typography.headlineSmall,
@@ -624,11 +637,51 @@ private fun NowPlayingCard(
             )
             if (uiState.hasSession) {
                 Text(
-                    text = "${formatTime(uiState.position)} / ${formatTime(uiState.duration)}" +
-                        if (uiState.sessionCount > 1) "  •  Session ${uiState.selectedSessionIndex}/${uiState.sessionCount}" else "",
+                    text = "${formatTime(uiState.position)} / ${formatTime(uiState.duration)}",
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SessionSwipePageDots(
+    selectedIndexOneBased: Int,
+    pageCount: Int,
+    modifier: Modifier = Modifier,
+) {
+    if (pageCount <= 1) return
+    val selectedZero = (selectedIndexOneBased - 1).coerceIn(0, pageCount - 1)
+    val colors = MaterialTheme.colorScheme
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .semantics {
+                contentDescription = "Sessions: ${selectedIndexOneBased.coerceAtLeast(1)} of $pageCount, swipe artwork to switch"
+            },
+    ) {
+        repeat(pageCount) { index ->
+            val filled = index == selectedZero
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .then(
+                        if (filled) {
+                            Modifier.background(colors.primary)
+                        } else {
+                            Modifier
+                                .background(Color.Transparent)
+                                .border(
+                                    width = 1.5.dp,
+                                    color = colors.outlineVariant,
+                                    shape = CircleShape,
+                                )
+                        },
+                    ),
+            )
         }
     }
 }
