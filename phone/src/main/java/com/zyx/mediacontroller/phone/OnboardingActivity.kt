@@ -13,7 +13,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -76,6 +75,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -113,6 +113,7 @@ data class PhonePlayerUiState(
     val artwork: Bitmap? = null,
     val artworkToken: String = "",
     val appIcon: Bitmap? = null,
+    val sessionPreviewArt: Map<String, Bitmap?> = emptyMap(),
 )
 
 class OnboardingActivity : ComponentActivity() {
@@ -252,6 +253,13 @@ class OnboardingActivity : ComponentActivity() {
         controller?.registerCallback(controllerCallback)
     }
 
+    private fun buildSessionPreviewArt(controllers: List<MediaController>): Map<String, Bitmap?> {
+        if (controllers.isEmpty()) return emptyMap()
+        return controllers.associate { controller ->
+            controller.sessionId() to controller.metadata.artworkBitmap()
+        }
+    }
+
     private fun MediaController?.toUiState(
         notificationAccessEnabled: Boolean,
         controllers: List<MediaController>,
@@ -266,6 +274,7 @@ class OnboardingActivity : ComponentActivity() {
                 isManualSelection = MediaControllerRegistry.hasPreferredController(),
                 playedApps = playedApps,
                 lastCommandRoute = CommandDiagnostics.lastRoute,
+                sessionPreviewArt = buildSessionPreviewArt(controllers),
             )
         }
 
@@ -304,6 +313,7 @@ class OnboardingActivity : ComponentActivity() {
             artwork = artwork,
             artworkToken = artwork?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
             appIcon = appIconFor(packageName),
+            sessionPreviewArt = buildSessionPreviewArt(controllers),
         )
     }
 
@@ -629,111 +639,162 @@ private fun ArtworkHeader(
     var dragTotal by remember { mutableStateOf(0f) }
     val artworkOffset = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     BoxWithConstraints(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
         val maxDrag = constraints.maxWidth * 0.42f
+        val swipeStrength = abs(artworkOffset.value) / maxDrag.coerceAtLeast(1f)
+        val swipeDirection = when {
+            artworkOffset.value < -0.5f -> 1
+            artworkOffset.value > 0.5f -> -1
+            else -> null
+        }
+        val peekSessionId = neighborSessionIdForSwipe(uiState.activeSessions, uiState.selectedSessionId, swipeDirection)
+        val peekArt = peekSessionId?.let { id -> uiState.sessionPreviewArt[id] }
+        val peekPackage = peekSessionId?.let { id -> uiState.activeSessions.firstOrNull { it.id == id }?.packageName }
+        val peekIcon = peekPackage?.let { packageName ->
+            remember(packageName) {
+                runCatching { context.packageManager.getApplicationIcon(packageName).toBitmap(width = 96, height = 96) }.getOrNull()
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(30.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer)
-                .graphicsLayer {
-                    val progress = (abs(artworkOffset.value) / maxDrag.coerceAtLeast(1f)).coerceIn(0f, 1f)
-                    translationX = artworkOffset.value
-                    alpha = 1f - (progress * 0.18f)
-                    scaleX = 1f - (progress * 0.04f)
-                    scaleY = 1f - (progress * 0.04f)
+                .clip(RoundedCornerShape(30.dp)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+            )
+            when {
+                peekArt != null -> {
+                    Image(
+                        bitmap = peekArt.asImageBitmap(),
+                        contentDescription = "Next session artwork preview",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
-                .pointerInput(uiState.activeSessions, uiState.selectedSessionId) {
-                    detectHorizontalDragGestures(
-                        onDragStart = {
-                            dragTotal = 0f
-                            scope.launch { artworkOffset.stop() }
-                        },
-                        onHorizontalDrag = { _, dragAmount ->
-                            dragTotal += dragAmount
-                            val nextOffset = (artworkOffset.value + dragAmount).coerceIn(-maxDrag, maxDrag)
-                            scope.launch { artworkOffset.snapTo(nextOffset) }
-                        },
-                        onDragEnd = {
-                            if (abs(dragTotal) > SWIPE_THRESHOLD_PX) {
-                                val direction = if (dragTotal < 0f) 1 else -1
-                                scope.launch {
-                                    artworkOffset.animateTo(
-                                        targetValue = if (direction > 0) -constraints.maxWidth.toFloat() else constraints.maxWidth.toFloat(),
-                                        animationSpec = tween(durationMillis = 160),
-                                    )
-                                    selectAdjacentSession(
-                                        activeSessions = uiState.activeSessions,
-                                        selectedSessionId = uiState.selectedSessionId,
-                                        direction = direction,
-                                        onSelectSession = onSelectSession,
-                                    )
-                                    artworkOffset.snapTo(if (direction > 0) constraints.maxWidth.toFloat() else -constraints.maxWidth.toFloat())
-                                    artworkOffset.animateTo(
-                                        targetValue = 0f,
-                                        animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
-                                    )
+                peekIcon != null -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Image(
+                            bitmap = peekIcon.asImageBitmap(),
+                            contentDescription = "Next session app icon",
+                            modifier = Modifier.size(72.dp),
+                        )
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val progress = swipeStrength.coerceIn(0f, 1f)
+                        translationX = artworkOffset.value
+                        alpha = 1f - (progress * 0.18f)
+                        scaleX = 1f - (progress * 0.04f)
+                        scaleY = 1f - (progress * 0.04f)
+                    }
+                    .pointerInput(
+                        uiState.activeSessions,
+                        uiState.selectedSessionId,
+                        uiState.sessionPreviewArt,
+                    ) {
+                        detectHorizontalDragGestures(
+                            onDragStart = {
+                                dragTotal = 0f
+                                scope.launch { artworkOffset.stop() }
+                            },
+                            onHorizontalDrag = { _, dragAmount ->
+                                dragTotal += dragAmount
+                                val nextOffset = (artworkOffset.value + dragAmount).coerceIn(-maxDrag, maxDrag)
+                                scope.launch { artworkOffset.snapTo(nextOffset) }
+                            },
+                            onDragEnd = {
+                                if (abs(dragTotal) > SWIPE_THRESHOLD_PX) {
+                                    val direction = if (dragTotal < 0f) 1 else -1
+                                    scope.launch {
+                                        selectAdjacentSession(
+                                            activeSessions = uiState.activeSessions,
+                                            selectedSessionId = uiState.selectedSessionId,
+                                            direction = direction,
+                                            onSelectSession = onSelectSession,
+                                        )
+                                        artworkOffset.snapTo(0f)
+                                    }
+                                } else {
+                                    scope.launch {
+                                        artworkOffset.animateTo(
+                                            targetValue = 0f,
+                                            animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
+                                        )
+                                    }
                                 }
-                            } else {
+                                dragTotal = 0f
+                            },
+                            onDragCancel = {
+                                dragTotal = 0f
                                 scope.launch {
                                     artworkOffset.animateTo(
                                         targetValue = 0f,
                                         animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
                                     )
                                 }
-                            }
-                            dragTotal = 0f
-                        },
-                        onDragCancel = {
-                            dragTotal = 0f
-                            scope.launch {
-                                artworkOffset.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
-                                )
-                            }
-                        },
-                    )
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            if (uiState.artwork != null) {
-                Image(
-                    bitmap = uiState.artwork.asImageBitmap(),
-                    contentDescription = "Media artwork",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (uiState.appIcon != null) {
-                        Image(
-                            bitmap = uiState.appIcon.asImageBitmap(),
-                            contentDescription = "${uiState.appName} icon",
-                            modifier = Modifier.size(72.dp),
+                            },
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    if (uiState.artwork != null) {
+                        Image(
+                            bitmap = uiState.artwork.asImageBitmap(),
+                            contentDescription = "Media artwork",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            if (uiState.appIcon != null) {
+                                Image(
+                                    bitmap = uiState.appIcon.asImageBitmap(),
+                                    contentDescription = "${uiState.appName} icon",
+                                    modifier = Modifier.size(72.dp),
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                            Text(
+                                text = uiState.appName.ifBlank { "Media" },
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 20.dp),
+                            )
+                        }
                     }
-                    Text(
-                        text = uiState.appName.ifBlank { "Media" },
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 20.dp),
+
+                    MediaControlOverlay(
+                        uiState = uiState,
+                        onTogglePlayback = onTogglePlayback,
+                        onSkipPrevious = onSkipPrevious,
+                        onSkipNext = onSkipNext,
+                        modifier = Modifier.align(Alignment.Center),
                     )
                 }
             }
-
-            MediaControlOverlay(
-                uiState = uiState,
-                onTogglePlayback = onTogglePlayback,
-                onSkipPrevious = onSkipPrevious,
-                onSkipNext = onSkipNext,
-            )
         }
     }
 }
@@ -744,12 +805,11 @@ private fun MediaControlOverlay(
     onTogglePlayback: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 22.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ControlIconButton(
@@ -818,6 +878,17 @@ private fun selectAdjacentSession(
     val currentIndex = activeSessions.indexOfFirst { it.id == selectedSessionId }.takeIf { it >= 0 } ?: 0
     val nextIndex = (currentIndex + direction).floorMod(activeSessions.size)
     onSelectSession(activeSessions[nextIndex].id)
+}
+
+private fun neighborSessionIdForSwipe(
+    activeSessions: List<ActiveSessionInfo>,
+    selectedSessionId: String,
+    swipeDirection: Int?,
+): String? {
+    if (activeSessions.size < 2 || swipeDirection == null) return null
+    val currentIndex = activeSessions.indexOfFirst { it.id == selectedSessionId }.takeIf { it >= 0 } ?: 0
+    val nextIndex = (currentIndex + swipeDirection).floorMod(activeSessions.size)
+    return activeSessions[nextIndex].id
 }
 
 private fun Int.floorMod(modulus: Int): Int {
