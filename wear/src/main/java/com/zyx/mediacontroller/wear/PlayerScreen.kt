@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.wear
+package se.kvrgic.mediawristremote.wear
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -26,9 +26,12 @@ fun PlayerScreen(
     onTogglePlayback: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
+    onSelectPreviousSession: () -> Unit,
+    onSelectNextSession: () -> Unit,
     canTogglePlayback: Boolean,
     canSkipPrevious: Boolean,
     canSkipNext: Boolean,
+    canSwitchSessions: Boolean,
 ) {
     Scaffold(timeText = { TimeText() }) {
         when {
@@ -74,9 +77,12 @@ fun PlayerScreen(
                     onTogglePlayback = onTogglePlayback,
                     onSkipPrevious = onSkipPrevious,
                     onSkipNext = onSkipNext,
+                    onSelectPreviousSession = onSelectPreviousSession,
+                    onSelectNextSession = onSelectNextSession,
                     canTogglePlayback = canTogglePlayback,
                     canSkipPrevious = canSkipPrevious,
                     canSkipNext = canSkipNext,
+                    canSwitchSessions = canSwitchSessions,
                 )
             }
         }
@@ -120,9 +126,12 @@ private fun ActivePlayerScreen(
     onTogglePlayback: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
+    onSelectPreviousSession: () -> Unit,
+    onSelectNextSession: () -> Unit,
     canTogglePlayback: Boolean,
     canSkipPrevious: Boolean,
     canSkipNext: Boolean,
+    canSwitchSessions: Boolean,
 ) {
     val subtitle = listOf(uiState.artist, uiState.appName)
         .filter { it.isNotBlank() }
@@ -147,10 +156,32 @@ private fun ActivePlayerScreen(
             textAlign = TextAlign.Center,
         )
         Text(
-            text = "${formatTime(uiState.position)} / ${formatTime(uiState.duration)}",
+            text = buildString {
+                append("${formatTime(uiState.position)} / ${formatTime(uiState.duration)}")
+                if (uiState.sessionCount > 1) {
+                    append(" • ${uiState.sessionIndex}/${uiState.sessionCount}")
+                }
+            },
             modifier = Modifier.padding(top = 12.dp),
             style = MaterialTheme.typography.caption3,
         )
+        if (uiState.sessionCount > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(onClick = onSelectPreviousSession, enabled = canSwitchSessions) {
+                    Text("App -")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(onClick = onSelectNextSession, enabled = canSwitchSessions) {
+                    Text("App +")
+                }
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()

@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 import android.content.Context
 import androidx.core.app.NotificationManagerCompat

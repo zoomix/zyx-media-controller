@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 import android.content.Context
 import android.media.session.MediaController
@@ -29,6 +29,9 @@ object MediaCommandDispatcher {
             MediaCommand.TOGGLE -> toggle(controller, onStateMayHaveChanged)
             MediaCommand.NEXT -> next(context, controller, skipButtonMode, onStateMayHaveChanged)
             MediaCommand.PREVIOUS -> previous(context, controller, skipButtonMode, onStateMayHaveChanged)
+            MediaCommand.SELECT_NEXT_SESSION,
+            MediaCommand.SELECT_PREVIOUS_SESSION,
+            -> onStateMayHaveChanged()
         }
     }
 

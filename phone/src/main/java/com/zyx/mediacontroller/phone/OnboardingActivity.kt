@@ -1,7 +1,8 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 import android.content.ComponentName
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -10,60 +11,102 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.FastRewind
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
+import kotlin.math.abs
 
-data class PlayerSessionOption(
-    val id: String,
-    val title: String,
-    val subtitle: String,
-    val stateLabel: String,
-)
+private enum class PhoneScreen { HOME, APP_CONTROLS, DIAGNOSTICS }
 
-data class CustomActionDiagnostic(
-    val label: String,
-    val action: String,
-    val extras: String,
-)
+data class CustomActionDiagnostic(val label: String, val action: String, val extras: String)
 
 data class PhonePlayerUiState(
     val notificationAccessEnabled: Boolean = false,
     val title: String = "",
     val artist: String = "",
     val appName: String = "",
+    val appPackageName: String = "",
     val isPlaying: Boolean = false,
     val duration: Long = 0L,
     val position: Long = 0L,
     val availableActions: Long = 0L,
     val hasSession: Boolean = false,
-    val sessionOptions: List<PlayerSessionOption> = emptyList(),
+    val activeSessions: List<ActiveSessionInfo> = emptyList(),
     val selectedSessionId: String = "",
+    val selectedSessionIndex: Int = 0,
+    val sessionCount: Int = 0,
     val isManualSelection: Boolean = false,
     val standardActionDiagnostics: List<String> = emptyList(),
     val customActionDiagnostics: List<CustomActionDiagnostic> = emptyList(),
+    val notificationActionDiagnostics: List<String> = emptyList(),
     val skipButtonMode: SkipButtonMode = SkipButtonMode.SEEK,
+    val playedApps: List<PlayedApp> = emptyList(),
     val lastCommandRoute: String = CommandDiagnostics.lastRoute,
+    val artwork: Bitmap? = null,
+    val artworkToken: String = "",
+    val appIcon: Bitmap? = null,
 )
 
 class OnboardingActivity : ComponentActivity() {
@@ -71,39 +114,34 @@ class OnboardingActivity : ComponentActivity() {
     private var activeController: MediaController? = null
     private var latestControllers: List<MediaController> = emptyList()
     private var uiState by mutableStateOf(PhonePlayerUiState())
+    private var currentScreen by mutableStateOf(PhoneScreen.HOME)
 
     private val controllerCallback = object : MediaController.Callback() {
-        override fun onMetadataChanged(metadata: MediaMetadata?) {
-            refreshState()
-        }
-
-        override fun onPlaybackStateChanged(state: PlaybackState?) {
-            refreshState()
-        }
-
-        override fun onSessionDestroyed() {
-            refreshState()
-        }
+        override fun onMetadataChanged(metadata: MediaMetadata?) = refreshState()
+        override fun onPlaybackStateChanged(state: PlaybackState?) = refreshState()
+        override fun onSessionDestroyed() = refreshState()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         refreshState()
         setContent {
-            MaterialTheme {
-                Surface {
-                    PhoneControllerScreen(
-                        uiState = uiState,
-                        onOpenSettings = ::openNotificationAccessSettings,
-                        onRefresh = ::refreshState,
-                        onTogglePlayback = ::togglePlayback,
-                        onSkipPrevious = ::skipPrevious,
-                        onSkipNext = ::skipNext,
-                        onSelectSession = ::selectSession,
-                        onClearPreferredSession = ::clearPreferredSession,
-                        onSetSkipButtonMode = ::setSkipButtonMode,
-                    )
-                }
+            MediaWristRemoteTheme {
+                PhoneApp(
+                    uiState = uiState,
+                    currentScreen = currentScreen,
+                    onNavigateHome = { currentScreen = PhoneScreen.HOME },
+                    onNavigateAppControls = { currentScreen = PhoneScreen.APP_CONTROLS },
+                    onNavigateDiagnostics = { currentScreen = PhoneScreen.DIAGNOSTICS },
+                    onOpenSettings = ::openNotificationAccessSettings,
+                    onRefresh = ::refreshState,
+                    onTogglePlayback = ::togglePlayback,
+                    onSkipPrevious = ::skipPrevious,
+                    onSkipNext = ::skipNext,
+                    onSelectSession = ::selectSession,
+                    onClearPreferredSession = ::clearPreferredSession,
+                    onSetSkipButtonMode = ::setSkipButtonMode,
+                )
             }
         }
     }
@@ -124,45 +162,39 @@ class OnboardingActivity : ComponentActivity() {
             selectController(null)
             uiState = PhonePlayerUiState(
                 notificationAccessEnabled = false,
-                skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+                playedApps = PhoneControlPreferences.playedApps(this),
+                lastCommandRoute = CommandDiagnostics.lastRoute,
             )
-            MediaStatePublisher.publish(
-                context = this,
-                payload = MediaStatePayload(connectionStatus = MediaConnectionStatus.PERMISSION_REQUIRED),
-            )
+            MediaStatePublisher.publish(this, MediaStatePayload(connectionStatus = MediaConnectionStatus.PERMISSION_REQUIRED))
             return
         }
 
         val controllers = activeSessions()
         latestControllers = controllers
+        controllers.forEach { controller ->
+            PhoneControlPreferences.rememberPlayedApp(
+                context = this,
+                packageName = controller.packageName,
+                displayName = appNameFor(controller.packageName),
+                observedActions = controller.playbackState?.actions ?: 0L,
+            )
+        }
 
-        val controller = MediaControllerRegistry.preferredControllerFrom(controllers)
-            ?: chooseBestController(controllers)
+        val controller = MediaControllerRegistry.preferredControllerFrom(controllers) ?: chooseBestController(controllers)
         selectController(controller)
-        uiState = controller.toUiState(
-            notificationAccessEnabled = true,
-            controllers = controllers,
-        )
-        MediaStatePublisher.publish(this, controller.toMediaStatePayload())
+        uiState = controller.toUiState(notificationAccessEnabled = true, controllers = controllers)
+        MediaStatePublisher.publish(this, controller.toMediaStatePayload(controllers))
     }
 
-    private fun activeSessions(): List<MediaController> {
-        return runCatching {
-            sessionManager.getActiveSessions(ComponentName(this, MediaSessionListenerService::class.java))
-        }.getOrDefault(emptyList())
-    }
+    private fun activeSessions(): List<MediaController> = runCatching {
+        sessionManager.getActiveSessions(ComponentName(this, MediaSessionListenerService::class.java))
+    }.getOrDefault(emptyList())
 
-    private fun openNotificationAccessSettings() {
-        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-    }
+    private fun openNotificationAccessSettings() = startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
 
     private fun togglePlayback() {
         val controller = activeController ?: return
-        MediaCommandDispatcher.dispatch(
-            controller = controller,
-            command = MediaCommand.TOGGLE,
-            onStateMayHaveChanged = ::refreshState,
-        )
+        MediaCommandDispatcher.dispatch(controller = controller, command = MediaCommand.TOGGLE, onStateMayHaveChanged = ::refreshState)
     }
 
     private fun skipPrevious() {
@@ -171,7 +203,7 @@ class OnboardingActivity : ComponentActivity() {
             context = this,
             controller = controller,
             command = MediaCommand.PREVIOUS,
-            skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this, controller.packageName),
             onStateMayHaveChanged = ::refreshState,
         )
     }
@@ -182,7 +214,7 @@ class OnboardingActivity : ComponentActivity() {
             context = this,
             controller = controller,
             command = MediaCommand.NEXT,
-            skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this, controller.packageName),
             onStateMayHaveChanged = ::refreshState,
         )
     }
@@ -191,7 +223,6 @@ class OnboardingActivity : ComponentActivity() {
         val controller = latestControllers.firstOrNull { it.sessionId() == sessionId }
             ?: activeSessions().firstOrNull { it.sessionId() == sessionId }
             ?: return
-
         MediaControllerRegistry.selectPreferredController(controller)
         selectController(controller)
         refreshState()
@@ -202,14 +233,13 @@ class OnboardingActivity : ComponentActivity() {
         refreshState()
     }
 
-    private fun setSkipButtonMode(mode: SkipButtonMode) {
-        PhoneControlPreferences.setSkipButtonMode(this, mode)
+    private fun setSkipButtonMode(packageName: String?, mode: SkipButtonMode) {
+        PhoneControlPreferences.setSkipButtonMode(this, packageName ?: activeController?.packageName, mode)
         refreshState()
     }
 
     private fun selectController(controller: MediaController?) {
         if (activeController?.sessionToken == controller?.sessionToken) return
-
         activeController?.unregisterCallback(controllerCallback)
         activeController = controller
         MediaControllerRegistry.updateActiveController(controller)
@@ -220,82 +250,89 @@ class OnboardingActivity : ComponentActivity() {
         notificationAccessEnabled: Boolean,
         controllers: List<MediaController>,
     ): PhonePlayerUiState {
-        val sessionOptions = controllers.map { it.toSessionOption() }
+        val selectedId = this?.sessionId().orEmpty()
+        val activeSessions = controllers.map { controller -> controller.toSessionInfo(selectedId) }
+        val playedApps = PhoneControlPreferences.playedApps(this@OnboardingActivity)
         if (this == null) {
             return PhonePlayerUiState(
                 notificationAccessEnabled = notificationAccessEnabled,
-                sessionOptions = sessionOptions,
+                activeSessions = activeSessions,
                 isManualSelection = MediaControllerRegistry.hasPreferredController(),
-                skipButtonMode = PhoneControlPreferences.skipButtonMode(this@OnboardingActivity),
+                playedApps = playedApps,
+                lastCommandRoute = CommandDiagnostics.lastRoute,
             )
         }
 
         val metadata = metadata
         val playbackState = playbackState
+        val artwork = metadata.artworkBitmap()
+        val selectedIndex = controllers.indexOfFirst { it.sessionToken == sessionToken }.takeIf { it >= 0 } ?: 0
         return PhonePlayerUiState(
             notificationAccessEnabled = notificationAccessEnabled,
             title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
             artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
             appName = appNameFor(packageName),
+            appPackageName = packageName,
             isPlaying = playbackState?.state == PlaybackState.STATE_PLAYING,
             duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
             position = playbackState?.position ?: 0L,
             availableActions = playbackState?.actions ?: 0L,
             hasSession = true,
-            sessionOptions = sessionOptions,
-            selectedSessionId = sessionId(),
+            activeSessions = activeSessions,
+            selectedSessionId = selectedId,
+            selectedSessionIndex = selectedIndex + 1,
+            sessionCount = controllers.size,
             isManualSelection = MediaControllerRegistry.hasPreferredController(),
             standardActionDiagnostics = playbackState?.actions.toStandardActionDiagnostics(),
-            customActionDiagnostics = playbackState?.customActions
-                .orEmpty()
-                .map { action ->
-                    CustomActionDiagnostic(
-                        label = action.name?.toString().orEmpty().ifBlank { "(no label)" },
-                        action = action.action,
-                        extras = action.extras.toExtrasSummary(),
-                    )
-                },
-            skipButtonMode = PhoneControlPreferences.skipButtonMode(this@OnboardingActivity),
+            customActionDiagnostics = playbackState?.customActions.orEmpty().map { action ->
+                CustomActionDiagnostic(
+                    label = action.name?.toString().orEmpty().ifBlank { "(no label)" },
+                    action = action.action,
+                    extras = action.extras.toExtrasSummary(),
+                )
+            },
+            notificationActionDiagnostics = NotificationActionRegistry.actionTitles(packageName),
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this@OnboardingActivity, packageName),
+            playedApps = playedApps,
             lastCommandRoute = CommandDiagnostics.lastRoute,
+            artwork = artwork,
+            artworkToken = artwork?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
+            appIcon = appIconFor(packageName),
         )
     }
 
-    private fun MediaController.toSessionOption(): PlayerSessionOption {
+    private fun MediaController.toSessionInfo(selectedId: String): ActiveSessionInfo {
         val metadata = metadata
-        val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
-            ?.takeIf { it.isNotBlank() }
-            ?: appNameFor(packageName)
-        val subtitle = listOf(
-            metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
-            appNameFor(packageName),
-        )
-            .filter { it.isNotBlank() && it != title }
-            .joinToString(" - ")
-
-        return PlayerSessionOption(
+        val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() } ?: appNameFor(packageName)
+        return ActiveSessionInfo(
             id = sessionId(),
+            packageName = packageName,
+            appName = appNameFor(packageName),
             title = title,
-            subtitle = subtitle.ifBlank { packageName },
+            artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
             stateLabel = playbackState?.state.toPlaybackStateLabel(),
+            isSelected = sessionId() == selectedId,
         )
     }
 
-    private fun MediaController?.toMediaStatePayload(): MediaStatePayload {
-        if (this == null) {
-            return MediaStatePayload(connectionStatus = MediaConnectionStatus.NO_SESSION)
-        }
-
+    private fun MediaController?.toMediaStatePayload(controllers: List<MediaController>): MediaStatePayload {
+        if (this == null) return MediaStatePayload(connectionStatus = MediaConnectionStatus.NO_SESSION)
         val metadata = metadata
         val playbackState = playbackState
+        val selectedIndex = controllers.indexOfFirst { it.sessionToken == sessionToken }.takeIf { it >= 0 } ?: 0
         return MediaStatePayload(
             connectionStatus = MediaConnectionStatus.READY,
             title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
             artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
             appName = appNameFor(packageName),
+            appPackageName = packageName,
             isPlaying = playbackState?.state == PlaybackState.STATE_PLAYING,
             duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
             position = playbackState?.position ?: 0L,
             availableActions = playbackState?.actions ?: 0L,
+            sessionIndex = selectedIndex + 1,
+            sessionCount = controllers.size,
+            artworkToken = metadata.artworkBitmap()?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
         )
     }
 
@@ -327,12 +364,45 @@ class OnboardingActivity : ComponentActivity() {
         }.getOrDefault(packageName)
     }
 
+    private fun appIconFor(packageName: String): Bitmap? {
+        return runCatching { packageManager.getApplicationIcon(packageName).toBitmap(width = 96, height = 96) }.getOrNull()
+    }
+
     private fun MediaController.sessionId(): String = "$packageName:${sessionToken.hashCode()}"
 }
 
 @Composable
-private fun PhoneControllerScreen(
+private fun MediaWristRemoteTheme(content: @Composable () -> Unit) {
+    val colors = if (isSystemInDarkTheme()) {
+        darkColorScheme(
+            primary = Color(0xFF9AD7FF),
+            secondary = Color(0xFFB9C8DA),
+            tertiary = Color(0xFFFFC4DD),
+            surface = Color(0xFF101418),
+            background = Color(0xFF0B0F12),
+        )
+    } else {
+        lightColorScheme(
+            primary = Color(0xFF006493),
+            secondary = Color(0xFF50606F),
+            tertiary = Color(0xFF8A4565),
+            surface = Color(0xFFF7FAFD),
+            background = Color(0xFFF3F7FB),
+        )
+    }
+    MaterialTheme(colorScheme = colors) {
+        Surface(color = MaterialTheme.colorScheme.background, content = content)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PhoneApp(
     uiState: PhonePlayerUiState,
+    currentScreen: PhoneScreen,
+    onNavigateHome: () -> Unit,
+    onNavigateAppControls: () -> Unit,
+    onNavigateDiagnostics: () -> Unit,
     onOpenSettings: () -> Unit,
     onRefresh: () -> Unit,
     onTogglePlayback: () -> Unit,
@@ -340,152 +410,202 @@ private fun PhoneControllerScreen(
     onSkipNext: () -> Unit,
     onSelectSession: (String) -> Unit,
     onClearPreferredSession: () -> Unit,
-    onSetSkipButtonMode: (SkipButtonMode) -> Unit,
+    onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "Phone Media Controller",
-            style = MaterialTheme.typography.headlineMedium,
-            textAlign = TextAlign.Center,
-        )
+    var menuExpanded by remember { mutableStateOf(false) }
 
-        PermissionCard(
-            notificationAccessEnabled = uiState.notificationAccessEnabled,
-            onOpenSettings = onOpenSettings,
-        )
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    text = "Active session",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = if (uiState.hasSession) {
-                        uiState.title.ifBlank { "Unknown track" }
-                    } else {
-                        "Nothing playing"
-                    },
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                if (uiState.hasSession) {
-                    val subtitle = listOf(uiState.artist, uiState.appName)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" - ")
-                    Text(text = subtitle.ifBlank { "Media session active" })
-                    Text(text = "${formatTime(uiState.position)} / ${formatTime(uiState.duration)}")
-                    Text(
-                        text = "Actions: ${actionSummary(uiState.availableActions)}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                } else {
-                    Text("Start playback in any media app, then refresh.")
-                }
-            }
-        }
-
-        if (uiState.notificationAccessEnabled) {
-            SessionPickerCard(
-                sessionOptions = uiState.sessionOptions,
-                selectedSessionId = uiState.selectedSessionId,
-                isManualSelection = uiState.isManualSelection,
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Media Wrist Remote", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text = uiState.appName.ifBlank { "Phone companion" },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Rounded.MoreVert, contentDescription = "Open menu")
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Now playing") },
+                            onClick = {
+                                menuExpanded = false
+                                onNavigateHome()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Per-app watch controls") },
+                            onClick = {
+                                menuExpanded = false
+                                onNavigateAppControls()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Diagnostics") },
+                            onClick = {
+                                menuExpanded = false
+                                onNavigateDiagnostics()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Refresh") },
+                            onClick = {
+                                menuExpanded = false
+                                onRefresh()
+                            },
+                        )
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        when (currentScreen) {
+            PhoneScreen.HOME -> HomeScreen(
+                uiState = uiState,
+                onOpenSettings = onOpenSettings,
+                onTogglePlayback = onTogglePlayback,
+                onSkipPrevious = onSkipPrevious,
+                onSkipNext = onSkipNext,
                 onSelectSession = onSelectSession,
                 onClearPreferredSession = onClearPreferredSession,
-            )
-        }
-
-        if (uiState.hasSession) {
-            WatchControlsCard(
-                selectedMode = uiState.skipButtonMode,
                 onSetSkipButtonMode = onSetSkipButtonMode,
+                modifier = Modifier.padding(padding),
             )
-
-            MediaDiagnosticsCard(
-                rawActions = uiState.availableActions,
-                standardActions = uiState.standardActionDiagnostics,
-                customActions = uiState.customActionDiagnostics,
-                lastCommandRoute = uiState.lastCommandRoute,
+            PhoneScreen.APP_CONTROLS -> AppControlsScreen(
+                uiState = uiState,
+                onSetSkipButtonMode = onSetSkipButtonMode,
+                modifier = Modifier.padding(padding),
             )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(
-                onClick = onSkipPrevious,
-                enabled = uiState.hasSession,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(uiState.skipButtonMode.previousButtonLabel)
-            }
-            Button(
-                onClick = onTogglePlayback,
-                enabled = uiState.hasSession,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(if (uiState.isPlaying) "Pause" else "Play")
-            }
-            Button(
-                onClick = onSkipNext,
-                enabled = uiState.hasSession,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(uiState.skipButtonMode.nextButtonLabel)
-            }
-        }
-
-        OutlinedButton(onClick = onRefresh) {
-            Text("Refresh")
+            PhoneScreen.DIAGNOSTICS -> DiagnosticsScreen(uiState = uiState, modifier = Modifier.padding(padding))
         }
     }
 }
 
 @Composable
-private fun PermissionCard(
-    notificationAccessEnabled: Boolean,
+private fun HomeScreen(
+    uiState: PhonePlayerUiState,
     onOpenSettings: () -> Unit,
+    onTogglePlayback: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    onSelectSession: (String) -> Unit,
+    @Suppress("UNUSED_PARAMETER") onClearPreferredSession: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        PermissionCard(uiState.notificationAccessEnabled, onOpenSettings)
+        NowPlayingCard(
+            uiState = uiState,
+            onTogglePlayback = onTogglePlayback,
+            onSkipPrevious = onSkipPrevious,
+            onSkipNext = onSkipNext,
+            onSelectSession = onSelectSession,
+        )
+    }
+}
+
+@Composable
+private fun PermissionCard(notificationAccessEnabled: Boolean, onOpenSettings: () -> Unit) {
+    if (notificationAccessEnabled) return
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Notification access needed", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Enable Notification Access so the phone can see media sessions and route watch controls.")
+            Button(onClick = onOpenSettings) { Text("Open Notification Access") }
+        }
+    }
+}
+
+@Composable
+private fun AppControlsScreen(
+    uiState: PhonePlayerUiState,
+    onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        PerAppControlsCard(
+            playedApps = uiState.playedApps,
+            currentPackageName = uiState.appPackageName,
+            onSetSkipButtonMode = onSetSkipButtonMode,
+        )
+    }
+}
+
+@Composable
+private fun NowPlayingCard(
+    uiState: PhonePlayerUiState,
+    onTogglePlayback: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    onSelectSession: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                text = if (notificationAccessEnabled) {
-                    "Notification access is enabled."
-                } else {
-                    "Enable Notification Access so the app can read and control the active media session."
-                },
+            ArtworkHeader(
+                uiState = uiState,
+                onTogglePlayback = onTogglePlayback,
+                onSkipPrevious = onSkipPrevious,
+                onSkipNext = onSkipNext,
+                onSelectSession = onSelectSession,
             )
-            Button(
-                onClick = onOpenSettings,
-                colors = if (notificationAccessEnabled) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
+            Text(
+                text = if (uiState.hasSession) uiState.title.ifBlank { "Unknown track" } else "Nothing playing",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = if (uiState.hasSession) {
+                    listOf(uiState.artist, uiState.appName).filter { it.isNotBlank() }.joinToString(" - ")
+                        .ifBlank { "Media session active" }
                 } else {
-                    ButtonDefaults.buttonColors()
+                    "Start playback in an app on your phone."
                 },
-            ) {
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (uiState.hasSession) {
                 Text(
-                    text = if (notificationAccessEnabled) {
-                        "Open Notification Access"
-                    } else {
-                        "Enable Notification Access"
-                    },
+                    text = "${formatTime(uiState.position)} / ${formatTime(uiState.duration)}" +
+                        if (uiState.sessionCount > 1) "  •  Session ${uiState.selectedSessionIndex}/${uiState.sessionCount}" else "",
+                    style = MaterialTheme.typography.labelLarge,
                 )
             }
         }
@@ -493,87 +613,221 @@ private fun PermissionCard(
 }
 
 @Composable
-private fun SessionPickerCard(
-    sessionOptions: List<PlayerSessionOption>,
+private fun ArtworkHeader(
+    uiState: PhonePlayerUiState,
+    onTogglePlayback: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    onSelectSession: (String) -> Unit,
+) {
+    var dragTotal by remember { mutableStateOf(0f) }
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(30.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer)
+                .pointerInput(uiState.activeSessions, uiState.selectedSessionId) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragTotal = 0f },
+                        onHorizontalDrag = { _, dragAmount -> dragTotal += dragAmount },
+                        onDragEnd = {
+                            if (abs(dragTotal) > SWIPE_THRESHOLD_PX) {
+                                selectAdjacentSession(
+                                    activeSessions = uiState.activeSessions,
+                                    selectedSessionId = uiState.selectedSessionId,
+                                    direction = if (dragTotal < 0f) 1 else -1,
+                                    onSelectSession = onSelectSession,
+                                )
+                            }
+                            dragTotal = 0f
+                        },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (uiState.artwork != null) {
+                Image(
+                    bitmap = uiState.artwork.asImageBitmap(),
+                    contentDescription = "Media artwork",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (uiState.appIcon != null) {
+                        Image(
+                            bitmap = uiState.appIcon.asImageBitmap(),
+                            contentDescription = "${uiState.appName} icon",
+                            modifier = Modifier.size(72.dp),
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                    Text(
+                        text = uiState.appName.ifBlank { "Media" },
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                    )
+                }
+            }
+
+            MediaControlOverlay(
+                uiState = uiState,
+                onTogglePlayback = onTogglePlayback,
+                onSkipPrevious = onSkipPrevious,
+                onSkipNext = onSkipNext,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaControlOverlay(
+    uiState: PhonePlayerUiState,
+    onTogglePlayback: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 22.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ControlIconButton(
+            imageVector = if (uiState.skipButtonMode == SkipButtonMode.SEEK) {
+                Icons.Rounded.FastRewind
+            } else {
+                Icons.Rounded.SkipPrevious
+            },
+            contentDescription = uiState.skipButtonMode.previousButtonLabel,
+            enabled = uiState.hasSession,
+            onClick = onSkipPrevious,
+        )
+        ControlIconButton(
+            imageVector = if (uiState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+            contentDescription = if (uiState.isPlaying) "Pause" else "Play",
+            enabled = uiState.hasSession,
+            size = 72,
+            onClick = onTogglePlayback,
+        )
+        ControlIconButton(
+            imageVector = if (uiState.skipButtonMode == SkipButtonMode.SEEK) {
+                Icons.Rounded.FastForward
+            } else {
+                Icons.Rounded.SkipNext
+            },
+            contentDescription = uiState.skipButtonMode.nextButtonLabel,
+            enabled = uiState.hasSession,
+            onClick = onSkipNext,
+        )
+    }
+}
+
+@Composable
+private fun ControlIconButton(
+    imageVector: ImageVector,
+    contentDescription: String,
+    enabled: Boolean,
+    size: Int = 60,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .size(size.dp)
+            .shadow(14.dp, RoundedCornerShape(50))
+            .clip(RoundedCornerShape(50))
+            .background(Color.Black.copy(alpha = if (enabled) 0.42f else 0.18f)),
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = contentDescription,
+            tint = Color.White.copy(alpha = if (enabled) 0.96f else 0.48f),
+            modifier = Modifier.size((size * 0.52f).dp),
+        )
+    }
+}
+
+private fun selectAdjacentSession(
+    activeSessions: List<ActiveSessionInfo>,
+    selectedSessionId: String,
+    direction: Int,
+    onSelectSession: (String) -> Unit,
+) {
+    if (activeSessions.size < 2) return
+    val currentIndex = activeSessions.indexOfFirst { it.id == selectedSessionId }.takeIf { it >= 0 } ?: 0
+    val nextIndex = (currentIndex + direction).floorMod(activeSessions.size)
+    onSelectSession(activeSessions[nextIndex].id)
+}
+
+private fun Int.floorMod(modulus: Int): Int {
+    return ((this % modulus) + modulus) % modulus
+}
+
+private const val SWIPE_THRESHOLD_PX = 90f
+
+@Composable
+private fun ActiveSessionsCard(
+    activeSessions: List<ActiveSessionInfo>,
     selectedSessionId: String,
     isManualSelection: Boolean,
     onSelectSession: (String) -> Unit,
     onClearPreferredSession: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Active sessions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(
-                text = "Instruction target",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = if (isManualSelection) {
-                    "Watch and phone controls are sent to the selected session."
-                } else {
-                    "Auto-selecting the most active session."
-                },
+                text = if (isManualSelection) "Pinned to the selected session." else "Auto-selecting the most active session.",
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            if (sessionOptions.isEmpty()) {
-                Text("No media sessions available.")
+            if (activeSessions.isEmpty()) {
+                Text("No active media sessions.")
             } else {
-                sessionOptions.forEach { option ->
-                    SessionOptionRow(
-                        option = option,
-                        isSelected = option.id == selectedSessionId,
-                        onSelectSession = onSelectSession,
-                    )
+                activeSessions.forEach { session ->
+                    SessionRow(session, session.id == selectedSessionId, onSelectSession)
                 }
             }
-
-            OutlinedButton(
-                onClick = onClearPreferredSession,
-                enabled = isManualSelection,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Auto-select target")
+            OutlinedButton(onClick = onClearPreferredSession, enabled = isManualSelection, modifier = Modifier.fillMaxWidth()) {
+                Text("Auto-select session")
             }
         }
     }
 }
 
 @Composable
-private fun SessionOptionRow(
-    option: PlayerSessionOption,
-    isSelected: Boolean,
-    onSelectSession: (String) -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun SessionRow(session: ActiveSessionInfo, isSelected: Boolean, onSelectSession: (String) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(session.appName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(session.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    text = option.title,
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(text = option.subtitle)
-                Text(
-                    text = option.stateLabel,
+                    text = listOf(session.artist, session.stateLabel).filter { it.isNotBlank() }.joinToString(" - "),
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-
-            Button(
-                onClick = { onSelectSession(option.id) },
-                enabled = !isSelected,
-            ) {
+            Button(onClick = { onSelectSession(session.id) }, enabled = !isSelected) {
                 Text(if (isSelected) "Selected" else "Use")
             }
         }
@@ -581,45 +835,66 @@ private fun SessionOptionRow(
 }
 
 @Composable
-private fun WatchControlsCard(
-    selectedMode: SkipButtonMode,
-    onSetSkipButtonMode: (SkipButtonMode) -> Unit,
+private fun PerAppControlsCard(
+    playedApps: List<PlayedApp>,
+    currentPackageName: String,
+    onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Per-app watch controls", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(
-                text = "Watch controls",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = "Choose what the watch Prev and Next buttons send to the selected session.",
+                "Choose what the watch Prev and Next buttons do for each media app. Routing stays on the phone.",
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (playedApps.isEmpty()) {
+                Text("Apps will appear here after they play media.")
+            } else {
+                playedApps.forEach { app ->
+                    AppControlRow(app, app.packageName == currentPackageName, onSetSkipButtonMode)
+                }
+            }
+        }
+    }
+}
 
-            SkipButtonMode.entries.forEach { mode ->
-                Button(
-                    onClick = { onSetSkipButtonMode(mode) },
-                    enabled = mode != selectedMode,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = if (mode == selectedMode) {
-                        ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                        )
-                    } else {
-                        ButtonDefaults.buttonColors()
-                    },
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = if (mode == selectedMode) "${mode.title} selected" else mode.title)
-                        Text(
-                            text = mode.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                        )
+@Composable
+private fun AppControlRow(
+    app: PlayedApp,
+    isCurrent: Boolean,
+    onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(app.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(app.packageName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (isCurrent) Text("Now", style = MaterialTheme.typography.labelLarge)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SkipButtonMode.entries.forEach { mode ->
+                    Button(
+                        onClick = { onSetSkipButtonMode(app.packageName, mode) },
+                        enabled = app.skipButtonMode != mode,
+                        modifier = Modifier.weight(1f),
+                        colors = if (app.skipButtonMode == mode) {
+                            ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        } else {
+                            ButtonDefaults.buttonColors()
+                        },
+                    ) {
+                        Text(if (app.skipButtonMode == mode) "${mode.shortTitle} ✓" else mode.shortTitle)
                     }
                 }
             }
@@ -628,65 +903,59 @@ private fun WatchControlsCard(
 }
 
 @Composable
-private fun MediaDiagnosticsCard(
-    rawActions: Long,
-    standardActions: List<String>,
-    customActions: List<CustomActionDiagnostic>,
-    lastCommandRoute: String,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = "Session diagnostics",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = "Raw actions: $rawActions",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "Standard actions: ${standardActions.ifEmpty { listOf("none") }.joinToString()}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "Last command: $lastCommandRoute",
-                style = MaterialTheme.typography.bodySmall,
-            )
+private fun DiagnosticsScreen(uiState: PhonePlayerUiState, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        DiagnosticsCard(uiState)
+    }
+}
 
+@Composable
+private fun DiagnosticsCard(uiState: PhonePlayerUiState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Diagnostics", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Selected app: ${uiState.appName.ifBlank { "None" }}")
+            Text("Package: ${uiState.appPackageName.ifBlank { "None" }}", style = MaterialTheme.typography.bodySmall)
+            Text("Session: ${uiState.selectedSessionId.ifBlank { "None" }}", style = MaterialTheme.typography.bodySmall)
+            Text("Artwork token: ${uiState.artworkToken.ifBlank { "none" }}", style = MaterialTheme.typography.bodySmall)
+            Text("Raw actions: ${uiState.availableActions}", style = MaterialTheme.typography.bodySmall)
             Text(
-                text = "Custom actions",
-                style = MaterialTheme.typography.titleSmall,
+                "Standard actions: ${uiState.standardActionDiagnostics.ifEmpty { listOf("none") }.joinToString()}",
+                style = MaterialTheme.typography.bodySmall,
             )
-            if (customActions.isEmpty()) {
-                Text(
-                    text = "None exposed by this session.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            Text("Notification actions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            uiState.notificationActionDiagnostics.ifEmpty { listOf("None exposed") }.forEach { action ->
+                Text(action, style = MaterialTheme.typography.bodySmall)
+            }
+            Text("Custom actions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            if (uiState.customActionDiagnostics.isEmpty()) {
+                Text("None exposed by this session.", style = MaterialTheme.typography.bodySmall)
             } else {
-                customActions.forEach { action ->
+                uiState.customActionDiagnostics.forEach { action ->
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = action.label,
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            text = action.action,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        if (action.extras.isNotBlank()) {
-                            Text(
-                                text = "Extras: ${action.extras}",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
+                        Text(action.label, style = MaterialTheme.typography.titleSmall)
+                        Text(action.action, style = MaterialTheme.typography.bodySmall)
+                        if (action.extras.isNotBlank()) Text("Extras: ${action.extras}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
+            Text("Last command", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(uiState.lastCommandRoute, style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+private fun MediaMetadata?.artworkBitmap(): Bitmap? {
+    if (this == null) return null
+    return getBitmap(MediaMetadata.METADATA_KEY_ART)
+        ?: getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+        ?: getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
 }
 
 private fun formatTime(milliseconds: Long): String {
@@ -695,23 +964,6 @@ private fun formatTime(milliseconds: Long): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "%d:%02d".format(minutes, seconds)
-}
-
-private fun actionSummary(actions: Long): String {
-    if (actions == 0L) return "not advertised"
-
-    val labels = buildList {
-        if (actions hasAction PlaybackState.ACTION_PLAY) add("play")
-        if (actions hasAction PlaybackState.ACTION_PAUSE) add("pause")
-        if (actions hasAction PlaybackState.ACTION_PLAY_PAUSE) add("toggle")
-        if (actions hasAction PlaybackState.ACTION_SKIP_TO_PREVIOUS) add("prev")
-        if (actions hasAction PlaybackState.ACTION_SKIP_TO_NEXT) add("next")
-        if (actions hasAction PlaybackState.ACTION_REWIND) add("rewind")
-        if (actions hasAction PlaybackState.ACTION_FAST_FORWARD) add("fast forward")
-        if (actions hasAction PlaybackState.ACTION_SEEK_TO) add("seek")
-    }
-
-    return labels.ifEmpty { listOf(actions.toString()) }.joinToString()
 }
 
 private infix fun Long.hasAction(action: Long): Boolean = this and action != 0L
@@ -728,6 +980,12 @@ private val SkipButtonMode.nextButtonLabel: String
         SkipButtonMode.TRACK -> "Next"
     }
 
+private val SkipButtonMode.shortTitle: String
+    get() = when (this) {
+        SkipButtonMode.SEEK -> "Seek"
+        SkipButtonMode.TRACK -> "Tracks"
+    }
+
 private fun Long?.toStandardActionDiagnostics(): List<String> {
     val actions = this ?: 0L
     return buildList {
@@ -735,56 +993,28 @@ private fun Long?.toStandardActionDiagnostics(): List<String> {
         if (actions hasAction PlaybackState.ACTION_PAUSE) add("PAUSE (${PlaybackState.ACTION_PAUSE})")
         if (actions hasAction PlaybackState.ACTION_PLAY) add("PLAY (${PlaybackState.ACTION_PLAY})")
         if (actions hasAction PlaybackState.ACTION_REWIND) add("REWIND (${PlaybackState.ACTION_REWIND})")
-        if (actions hasAction PlaybackState.ACTION_SKIP_TO_PREVIOUS) {
-            add("SKIP_TO_PREVIOUS (${PlaybackState.ACTION_SKIP_TO_PREVIOUS})")
-        }
-        if (actions hasAction PlaybackState.ACTION_SKIP_TO_NEXT) {
-            add("SKIP_TO_NEXT (${PlaybackState.ACTION_SKIP_TO_NEXT})")
-        }
-        if (actions hasAction PlaybackState.ACTION_FAST_FORWARD) {
-            add("FAST_FORWARD (${PlaybackState.ACTION_FAST_FORWARD})")
-        }
+        if (actions hasAction PlaybackState.ACTION_SKIP_TO_PREVIOUS) add("SKIP_TO_PREVIOUS (${PlaybackState.ACTION_SKIP_TO_PREVIOUS})")
+        if (actions hasAction PlaybackState.ACTION_SKIP_TO_NEXT) add("SKIP_TO_NEXT (${PlaybackState.ACTION_SKIP_TO_NEXT})")
+        if (actions hasAction PlaybackState.ACTION_FAST_FORWARD) add("FAST_FORWARD (${PlaybackState.ACTION_FAST_FORWARD})")
         if (actions hasAction PlaybackState.ACTION_SEEK_TO) add("SEEK_TO (${PlaybackState.ACTION_SEEK_TO})")
-        if (actions hasAction PlaybackState.ACTION_PLAY_PAUSE) {
-            add("PLAY_PAUSE (${PlaybackState.ACTION_PLAY_PAUSE})")
-        }
-        if (actions hasAction PlaybackState.ACTION_SET_RATING) {
-            add("SET_RATING (${PlaybackState.ACTION_SET_RATING})")
-        }
-        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_MEDIA_ID) {
-            add("PLAY_FROM_MEDIA_ID (${PlaybackState.ACTION_PLAY_FROM_MEDIA_ID})")
-        }
-        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_SEARCH) {
-            add("PLAY_FROM_SEARCH (${PlaybackState.ACTION_PLAY_FROM_SEARCH})")
-        }
-        if (actions hasAction PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM) {
-            add("SKIP_TO_QUEUE_ITEM (${PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM})")
-        }
-        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_URI) {
-            add("PLAY_FROM_URI (${PlaybackState.ACTION_PLAY_FROM_URI})")
-        }
+        if (actions hasAction PlaybackState.ACTION_PLAY_PAUSE) add("PLAY_PAUSE (${PlaybackState.ACTION_PLAY_PAUSE})")
+        if (actions hasAction PlaybackState.ACTION_SET_RATING) add("SET_RATING (${PlaybackState.ACTION_SET_RATING})")
+        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_MEDIA_ID) add("PLAY_FROM_MEDIA_ID (${PlaybackState.ACTION_PLAY_FROM_MEDIA_ID})")
+        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_SEARCH) add("PLAY_FROM_SEARCH (${PlaybackState.ACTION_PLAY_FROM_SEARCH})")
+        if (actions hasAction PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM) add("SKIP_TO_QUEUE_ITEM (${PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM})")
+        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_URI) add("PLAY_FROM_URI (${PlaybackState.ACTION_PLAY_FROM_URI})")
         if (actions hasAction PlaybackState.ACTION_PREPARE) add("PREPARE (${PlaybackState.ACTION_PREPARE})")
-        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_MEDIA_ID) {
-            add("PREPARE_FROM_MEDIA_ID (${PlaybackState.ACTION_PREPARE_FROM_MEDIA_ID})")
-        }
-        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_SEARCH) {
-            add("PREPARE_FROM_SEARCH (${PlaybackState.ACTION_PREPARE_FROM_SEARCH})")
-        }
-        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_URI) {
-            add("PREPARE_FROM_URI (${PlaybackState.ACTION_PREPARE_FROM_URI})")
-        }
-        if (actions hasAction PlaybackState.ACTION_SET_PLAYBACK_SPEED) {
-            add("SET_PLAYBACK_SPEED (${PlaybackState.ACTION_SET_PLAYBACK_SPEED})")
-        }
+        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_MEDIA_ID) add("PREPARE_FROM_MEDIA_ID (${PlaybackState.ACTION_PREPARE_FROM_MEDIA_ID})")
+        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_SEARCH) add("PREPARE_FROM_SEARCH (${PlaybackState.ACTION_PREPARE_FROM_SEARCH})")
+        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_URI) add("PREPARE_FROM_URI (${PlaybackState.ACTION_PREPARE_FROM_URI})")
+        if (actions hasAction PlaybackState.ACTION_SET_PLAYBACK_SPEED) add("SET_PLAYBACK_SPEED (${PlaybackState.ACTION_SET_PLAYBACK_SPEED})")
     }
 }
 
 @Suppress("DEPRECATION")
 private fun Bundle?.toExtrasSummary(): String {
     if (this == null || isEmpty) return ""
-    return keySet()
-        .sorted()
-        .joinToString { key -> "$key=${get(key)}" }
+    return keySet().sorted().joinToString { key -> "$key=${get(key)}" }
 }
 
 private fun Int?.toPlaybackStateLabel(): String {

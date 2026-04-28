@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.wear
+package se.kvrgic.mediawristremote.wear
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -22,9 +22,12 @@ class MainActivity : ComponentActivity() {
                     onTogglePlayback = viewModel::togglePlayback,
                     onSkipPrevious = viewModel::skipPrevious,
                     onSkipNext = viewModel::skipNext,
+                    onSelectPreviousSession = viewModel::selectPreviousSession,
+                    onSelectNextSession = viewModel::selectNextSession,
                     canTogglePlayback = viewModel.canTogglePlayback(),
                     canSkipPrevious = viewModel.canSkipPrevious(),
                     canSkipNext = viewModel.canSkipNext(),
+                    canSwitchSessions = viewModel.canSwitchSessions(),
                 )
             }
         }

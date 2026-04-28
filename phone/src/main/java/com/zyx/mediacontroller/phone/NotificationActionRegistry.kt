@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 import android.app.Notification
 import android.app.PendingIntent
@@ -36,6 +36,12 @@ object NotificationActionRegistry {
     fun sendSeekForward(context: Context, packageName: String): String? {
         return sendFirstMatching(context, packageName) { action ->
             action.matchesAny("fast forward", "forward", "seek ahead", "seek forward", "skip ahead", "skip forward", "fram")
+        }
+    }
+
+    fun actionTitles(packageName: String): List<String> {
+        return synchronized(lock) {
+            actionsByPackageName[packageName].orEmpty().map { it.title.ifBlank { "(untitled)" } }
         }
     }
 

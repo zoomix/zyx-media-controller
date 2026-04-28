@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.zyx.mediacontroller.phone"
+    namespace = "se.kvrgic.mediawristremote.phone"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.zyx.mediacontroller"
+        applicationId = "se.kvrgic.mediawristremote"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -58,6 +58,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.media:media:1.7.0")
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
 

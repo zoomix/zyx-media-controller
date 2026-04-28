@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 object CommandDiagnostics {
     @Volatile

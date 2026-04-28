@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 import org.json.JSONObject
 
@@ -15,6 +15,8 @@ enum class MediaCommand {
     TOGGLE,
     NEXT,
     PREVIOUS,
+    SELECT_NEXT_SESSION,
+    SELECT_PREVIOUS_SESSION,
     ;
 
     fun toPayload(): ByteArray = name.toByteArray(Charsets.UTF_8)
@@ -38,10 +40,14 @@ data class MediaStatePayload(
     val title: String = "",
     val artist: String = "",
     val appName: String = "",
+    val appPackageName: String = "",
     val isPlaying: Boolean = false,
     val duration: Long = 0L,
     val position: Long = 0L,
     val availableActions: Long = 0L,
+    val sessionIndex: Int = 0,
+    val sessionCount: Int = 0,
+    val artworkToken: String = "",
 ) {
     fun toJson(): String {
         return JSONObject()
@@ -49,10 +55,14 @@ data class MediaStatePayload(
             .put("title", title)
             .put("artist", artist)
             .put("appName", appName)
+            .put("appPackageName", appPackageName)
             .put("isPlaying", isPlaying)
             .put("duration", duration)
             .put("position", position)
             .put("actions", availableActions)
+            .put("sessionIndex", sessionIndex)
+            .put("sessionCount", sessionCount)
+            .put("artworkToken", artworkToken)
             .toString()
     }
 }

@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.wear
+package se.kvrgic.mediawristremote.wear
 
 import android.content.Context
 import com.google.android.gms.wearable.DataClient

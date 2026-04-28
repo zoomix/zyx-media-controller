@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.zyx.mediacontroller.wear"
+    namespace = "se.kvrgic.mediawristremote.wear"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.zyx.mediacontroller"
+        applicationId = "se.kvrgic.mediawristremote"
         minSdk = 30
         targetSdk = 34
         versionCode = 1

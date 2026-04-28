@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 import android.content.ComponentName
 import android.media.MediaMetadata
@@ -104,6 +104,14 @@ class MediaSessionListenerService : NotificationListenerService() {
         }
 
         selectActiveController(controllers)
+        controllers.forEach { controller ->
+            PhoneControlPreferences.rememberPlayedApp(
+                context = this,
+                packageName = controller.packageName,
+                displayName = appNameFor(controller.packageName),
+                observedActions = controller.playbackState?.actions ?: 0L,
+            )
+        }
     }
 
     private fun refreshNotificationActions() {
@@ -156,6 +164,7 @@ class MediaSessionListenerService : NotificationListenerService() {
             title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
             artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
             appName = appNameFor(controller.packageName),
+            appPackageName = controller.packageName,
             isPlaying = playbackState?.state == PlaybackState.STATE_PLAYING,
             duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
             position = playbackState?.position ?: 0L,

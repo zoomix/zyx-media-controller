@@ -1,4 +1,4 @@
-package com.zyx.mediacontroller.wear
+package se.kvrgic.mediawristremote.wear
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -11,10 +11,13 @@ data class PlayerUiState(
     val title: String = "",
     val artist: String = "",
     val appName: String = "",
+    val appPackageName: String = "",
     val isPlaying: Boolean = false,
     val duration: Long = 0L,
     val position: Long = 0L,
     val availableActions: Long = 0L,
+    val sessionIndex: Int = 0,
+    val sessionCount: Int = 0,
     val isPhoneReachable: Boolean = false,
     val hasLoadedState: Boolean = false,
     val connectionStatus: MediaConnectionStatus? = null,
@@ -60,6 +63,14 @@ class MediaControlViewModel(application: Application) : AndroidViewModel(applica
         sendCommand(MediaCommand.PREVIOUS)
     }
 
+    fun selectNextSession() {
+        sendCommand(MediaCommand.SELECT_NEXT_SESSION)
+    }
+
+    fun selectPreviousSession() {
+        sendCommand(MediaCommand.SELECT_PREVIOUS_SESSION)
+    }
+
     private fun sendCommand(command: MediaCommand) {
         nodeClient.connectedNodes
             .addOnSuccessListener { nodes ->
@@ -83,10 +94,13 @@ class MediaControlViewModel(application: Application) : AndroidViewModel(applica
             title = payload.title,
             artist = payload.artist,
             appName = payload.appName,
+            appPackageName = payload.appPackageName,
             isPlaying = payload.isPlaying,
             duration = payload.duration,
             position = payload.position,
             availableActions = payload.availableActions,
+            sessionIndex = payload.sessionIndex,
+            sessionCount = payload.sessionCount,
             isPhoneReachable = true,
             hasLoadedState = true,
             connectionStatus = payload.connectionStatus,
@@ -103,6 +117,8 @@ class MediaControlViewModel(application: Application) : AndroidViewModel(applica
     fun canSkipNext(): Boolean = hasReadySession()
 
     fun canTogglePlayback(): Boolean = hasReadySession()
+
+    fun canSwitchSessions(): Boolean = hasReadySession() && _uiState.value.sessionCount > 1
 
     private fun hasReadySession(): Boolean {
         val state = _uiState.value

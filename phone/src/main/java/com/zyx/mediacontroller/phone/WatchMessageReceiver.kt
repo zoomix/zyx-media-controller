@@ -1,6 +1,7 @@
-package com.zyx.mediacontroller.phone
+package se.kvrgic.mediawristremote.phone
 
 import android.content.ComponentName
+import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
@@ -15,24 +16,43 @@ class WatchMessageReceiver : WearableListenerService() {
         }
 
         val command = MediaCommand.fromPayload(messageEvent.data) ?: return
-        val controller = MediaControllerRegistry.activeController ?: activeMediaController() ?: return
+        val controllers = activeMediaControllers()
+        val controller = when (command) {
+            MediaCommand.SELECT_NEXT_SESSION -> {
+                MediaControllerRegistry.selectNextController(controllers)
+            }
+
+            MediaCommand.SELECT_PREVIOUS_SESSION -> {
+                MediaControllerRegistry.selectPreviousController(controllers)
+            }
+
+            else -> MediaControllerRegistry.activeController ?: activeMediaController(controllers)
+        } ?: return
+
+        if (command == MediaCommand.SELECT_NEXT_SESSION || command == MediaCommand.SELECT_PREVIOUS_SESSION) {
+            MediaControllerRegistry.updateActiveController(controller)
+            MediaStatePublisher.publish(this, controller.toMediaStatePayload(controllers))
+            return
+        }
 
         MediaCommandDispatcher.dispatch(
             context = this,
             controller = controller,
             command = command,
-            skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this, controller.packageName),
         )
     }
 
-    private fun activeMediaController(): MediaController? {
-        if (!NotificationAccess.isEnabled(this)) return null
+    private fun activeMediaControllers(): List<MediaController> {
+        if (!NotificationAccess.isEnabled(this)) return emptyList()
 
         val sessionManager = getSystemService(MediaSessionManager::class.java)
-        val controllers = runCatching {
+        return runCatching {
             sessionManager.getActiveSessions(ComponentName(this, MediaSessionListenerService::class.java))
         }.getOrDefault(emptyList())
+    }
 
+    private fun activeMediaController(controllers: List<MediaController> = activeMediaControllers()): MediaController? {
         return MediaControllerRegistry.preferredControllerFrom(controllers)
             ?: controllers
             .filter { controller ->
@@ -52,5 +72,33 @@ class WatchMessageReceiver : WearableListenerService() {
         }
         val metadataBonus = if (controller.metadata != null) 10 else 0
         return stateScore + metadataBonus
+    }
+
+    private fun MediaController.toMediaStatePayload(controllers: List<MediaController>): MediaStatePayload {
+        val metadata = metadata
+        val playbackState = playbackState
+        val selectedIndex = controllers.indexOfFirst { it.sessionToken == sessionToken }
+            .takeIf { it >= 0 }
+            ?: 0
+        return MediaStatePayload(
+            connectionStatus = MediaConnectionStatus.READY,
+            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
+            artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
+            appName = appNameFor(packageName),
+            appPackageName = packageName,
+            isPlaying = playbackState?.state == PlaybackState.STATE_PLAYING,
+            duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
+            position = playbackState?.position ?: 0L,
+            availableActions = playbackState?.actions ?: 0L,
+            sessionIndex = selectedIndex + 1,
+            sessionCount = controllers.size,
+        )
+    }
+
+    private fun appNameFor(packageName: String): String {
+        return runCatching {
+            val applicationInfo = packageManager.getApplicationInfo(packageName, 0)
+            packageManager.getApplicationLabel(applicationInfo).toString()
+        }.getOrDefault(packageName)
     }
 }
