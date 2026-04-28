@@ -4,14 +4,18 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,21 +27,24 @@ import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.FastRewind
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -50,10 +57,7 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Scaffold
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
-import kotlin.math.abs
-
-private const val SESSION_SWIPE_THRESHOLD_PX = 48f
-
+import kotlinx.coroutines.flow.distinctUntilChanged
 /** Must match tallest control in [TranslucentMediaButton] (`large`). */
 private val MEDIA_CONTROL_ROW_HEIGHT = 46.dp
 
@@ -84,12 +88,10 @@ fun PlayerScreen(
     onTogglePlayback: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
-    onSelectPreviousSession: () -> Unit,
-    onSelectNextSession: () -> Unit,
+    onSelectSessionAt: (Int) -> Unit,
     canTogglePlayback: Boolean,
     canSkipPrevious: Boolean,
     canSkipNext: Boolean,
-    canSwitchSessions: Boolean,
 ) {
     Scaffold(timeText = { TimeText() }) {
         when {
@@ -135,12 +137,10 @@ fun PlayerScreen(
                     onTogglePlayback = onTogglePlayback,
                     onSkipPrevious = onSkipPrevious,
                     onSkipNext = onSkipNext,
-                    onSelectPreviousSession = onSelectPreviousSession,
-                    onSelectNextSession = onSelectNextSession,
+                    onSelectSessionAt = onSelectSessionAt,
                     canTogglePlayback = canTogglePlayback,
                     canSkipPrevious = canSkipPrevious,
                     canSkipNext = canSkipNext,
-                    canSwitchSessions = canSwitchSessions,
                 )
             }
         }
@@ -178,65 +178,93 @@ private fun StatusScreen(
     }
 }
 
+private fun carouselAlbumLine(tile: SessionCarouselEntry): String =
+    tile.artist.takeIf { it.isNotBlank() } ?: tile.appName
+
 @Composable
-private fun ActivePlayerScreen(
+@OptIn(ExperimentalFoundationApi::class)
+private fun CarouselSessionActiveContent(
     uiState: PlayerUiState,
+    tiles: List<SessionCarouselEntry>,
+    pageCount: Int,
     onTogglePlayback: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
-    onSelectPreviousSession: () -> Unit,
-    onSelectNextSession: () -> Unit,
+    onSelectSessionAt: (Int) -> Unit,
     canTogglePlayback: Boolean,
     canSkipPrevious: Boolean,
     canSkipNext: Boolean,
-    canSwitchSessions: Boolean,
 ) {
-    val albumOrShow = when {
-        uiState.artist.isNotBlank() -> uiState.artist
-        uiState.appName.isNotBlank() -> uiState.appName
-        else -> ""
+    val safePageCount = pageCount.coerceAtLeast(1)
+    val initialPage = (uiState.sessionIndex.coerceIn(1, safePageCount) - 1).coerceIn(0, safePageCount - 1)
+    val pagerState = rememberPagerState(
+        initialPage = initialPage,
+        pageCount = { safePageCount },
+    )
+    val sessionIndexStable by rememberUpdatedState(uiState.sessionIndex.coerceIn(1, safePageCount))
+    var lastRequestedPage by remember(safePageCount) { mutableStateOf(initialPage) }
+
+    // Phone -> watch sync: if phone switches session externally, align pager.
+    LaunchedEffect(uiState.sessionIndex, safePageCount) {
+        val phoneIdx = uiState.sessionIndex.coerceIn(1, safePageCount) - 1
+        if (!pagerState.isScrollInProgress && pagerState.currentPage != phoneIdx) {
+            pagerState.animateScrollToPage(phoneIdx)
+        }
     }
 
-    val artworkBitmap = remember(uiState.artworkToken, uiState.artworkBase64) {
-        decodeWearArtworkJpeg(uiState.artworkBase64)
+    // Watch -> phone sync: commit whenever the selected page changes.
+    LaunchedEffect(pagerState, safePageCount) {
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { page ->
+                if (page !in 0 until safePageCount) return@collect
+                if (page != lastRequestedPage) {
+                    lastRequestedPage = page
+                    onSelectSessionAt(page + 1)
+                }
+            }
     }
 
-    var dragTotal by remember { mutableStateOf(0f) }
+    val previewIndex = pagerState.currentPage.coerceIn(0, safePageCount - 1)
+    val previewTile = tiles.getOrNull(previewIndex)
+    val titleText = previewTile?.title?.takeIf { it.isNotBlank() } ?: uiState.title.ifBlank { "Unknown track" }
+    val albumLine = previewTile?.let(::carouselAlbumLine).orEmpty()
+        .ifBlank {
+            when {
+                uiState.artist.isNotBlank() -> uiState.artist
+                uiState.appName.isNotBlank() -> uiState.appName
+                else -> ""
+            }
+        }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(canSwitchSessions, onSelectNextSession, onSelectPreviousSession) {
-                if (!canSwitchSessions) return@pointerInput
-                detectHorizontalDragGestures(
-                    onDragStart = { dragTotal = 0f },
-                    onHorizontalDrag = { _, dx -> dragTotal += dx },
-                    onDragEnd = {
-                        if (abs(dragTotal) > SESSION_SWIPE_THRESHOLD_PX) {
-                            if (dragTotal < 0f) {
-                                onSelectNextSession()
-                            } else {
-                                onSelectPreviousSession()
-                            }
-                        }
-                        dragTotal = 0f
-                    },
-                    onDragCancel = { dragTotal = 0f },
-                )
-            },
+            .background(MaterialTheme.colors.background),
     ) {
-        // Full-bleed backdrop: scale to fill the screen (round display clips corners / edges)
-        when {
-            artworkBitmap != null && !artworkBitmap.isRecycled -> {
+        VerticalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxSize()
+                .clipToBounds(),
+        ) { page ->
+            val tile = tiles.getOrNull(page)
+            val fallbackCurrentSessionPage = sessionIndexStable - 1
+            val artBase64 = tile?.artworkBase64.takeIf { !it.isNullOrBlank() }
+                ?: if (page == fallbackCurrentSessionPage) uiState.artworkBase64 else ""
+            val artToken = tile?.artworkToken.takeIf { !it.isNullOrBlank() }
+                ?: if (page == fallbackCurrentSessionPage) uiState.artworkToken else ""
+            val tileBitmap = remember(artToken, artBase64) {
+                decodeWearArtworkJpeg(artBase64)
+            }
+            if (tileBitmap != null && !tileBitmap.isRecycled) {
                 Image(
-                    bitmap = artworkBitmap.asImageBitmap(),
-                    contentDescription = "Album artwork",
+                    bitmap = tileBitmap.asImageBitmap(),
+                    contentDescription = "Session artwork",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
-            }
-
-            else -> {
+            } else {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -252,72 +280,64 @@ private fun ActivePlayerScreen(
             }
         }
 
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 10.dp)
-                .padding(top = 4.dp, bottom = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .padding(start = 10.dp, top = 4.dp, bottom = 10.dp)
+                .padding(end = if (uiState.sessionCount > 1) 4.dp else 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Track title: bottom-aligned in upper half → extra lines grow upward
-            Box(
+            Column(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.BottomCenter,
+                    .fillMaxHeight(),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(
-                    text = uiState.title.ifBlank { "Unknown track" },
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = TEXT_ANCHOR_GAP),
-                    style = overlayTitleStyle(
-                        MaterialTheme.typography.title3.copy(
-                            fontSize = 17.sp,
-                            lineHeight = 20.sp,
-                        ),
-                    ),
-                    textAlign = TextAlign.Center,
-                    softWrap = true,
-                    maxLines = 24,
-                    overflow = TextOverflow.Visible,
-                )
-            }
-
-            // Fixed-height row (46.dp = largest translucent control)
-            MediaTransportControlsRow(
-                rowHeight = MEDIA_CONTROL_ROW_HEIGHT,
-                isPlaying = uiState.isPlaying,
-                canTogglePlayback = canTogglePlayback,
-                canSkipPrevious = canSkipPrevious,
-                canSkipNext = canSkipNext,
-                onTogglePlayback = onTogglePlayback,
-                onSkipPrevious = onSkipPrevious,
-                onSkipNext = onSkipNext,
-            )
-
-            // Album / session dots: top-aligned below buttons → extra lines grow downward
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(top = TEXT_ANCHOR_GAP),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.BottomCenter,
                 ) {
-                    if (uiState.sessionCount > 1) {
-                        SessionPageDots(
-                            selectedIndexOneBased = uiState.sessionIndex,
-                            pageCount = uiState.sessionCount,
-                            modifier = Modifier.padding(bottom = 8.dp),
-                        )
-                    }
-                    if (albumOrShow.isNotBlank()) {
+                    Text(
+                        text = titleText,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = TEXT_ANCHOR_GAP),
+                        style = overlayTitleStyle(
+                            MaterialTheme.typography.title3.copy(
+                                fontSize = 17.sp,
+                                lineHeight = 20.sp,
+                            ),
+                        ),
+                        textAlign = TextAlign.Center,
+                        softWrap = true,
+                        maxLines = 24,
+                        overflow = TextOverflow.Visible,
+                    )
+                }
+
+                MediaTransportControlsRow(
+                    rowHeight = MEDIA_CONTROL_ROW_HEIGHT,
+                    isPlaying = uiState.isPlaying,
+                    canTogglePlayback = canTogglePlayback,
+                    canSkipPrevious = canSkipPrevious,
+                    canSkipNext = canSkipNext,
+                    onTogglePlayback = onTogglePlayback,
+                    onSkipPrevious = onSkipPrevious,
+                    onSkipNext = onSkipNext,
+                )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(top = TEXT_ANCHOR_GAP),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    if (albumLine.isNotBlank()) {
                         Text(
-                            text = albumOrShow,
+                            text = albumLine,
                             style = overlayBodyStyle(MaterialTheme.typography.body2),
                             textAlign = TextAlign.Center,
                             softWrap = true,
@@ -325,6 +345,167 @@ private fun ActivePlayerScreen(
                             overflow = TextOverflow.Visible,
                         )
                     }
+                }
+            }
+
+            if (safePageCount > 1) {
+                SessionPageDots(
+                    selectedIndexOneBased = pagerState.currentPage + 1,
+                    pageCount = safePageCount,
+                    vertical = true,
+                    modifier = Modifier.padding(start = 2.dp, end = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivePlayerScreen(
+    uiState: PlayerUiState,
+    onTogglePlayback: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    onSelectSessionAt: (Int) -> Unit,
+    canTogglePlayback: Boolean,
+    canSkipPrevious: Boolean,
+    canSkipNext: Boolean,
+) {
+    val carouselTiles = uiState.sessionCarousel
+    if (uiState.sessionCount >= 2) {
+        CarouselSessionActiveContent(
+            uiState = uiState,
+            tiles = carouselTiles,
+            pageCount = uiState.sessionCount,
+            onTogglePlayback = onTogglePlayback,
+            onSkipPrevious = onSkipPrevious,
+            onSkipNext = onSkipNext,
+            onSelectSessionAt = onSelectSessionAt,
+            canTogglePlayback = canTogglePlayback,
+            canSkipPrevious = canSkipPrevious,
+            canSkipNext = canSkipNext,
+        )
+        return
+    }
+
+    val albumOrShow = when {
+        uiState.artist.isNotBlank() -> uiState.artist
+        uiState.appName.isNotBlank() -> uiState.appName
+        else -> ""
+    }
+
+    val artworkBitmap = remember(uiState.artworkToken, uiState.artworkBase64) {
+        decodeWearArtworkJpeg(uiState.artworkBase64)
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+        ) {
+            // Full-bleed backdrop: scale to fill the screen (round display clips corners / edges)
+            when {
+                artworkBitmap != null && !artworkBitmap.isRecycled -> {
+                    Image(
+                        bitmap = artworkBitmap.asImageBitmap(),
+                        contentDescription = "Album artwork",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                else -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colors.primary.copy(alpha = 0.85f),
+                                        MaterialTheme.colors.background,
+                                    ),
+                                ),
+                            ),
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 10.dp, top = 4.dp, bottom = 10.dp)
+                    .padding(end = if (uiState.sessionCount > 1) 4.dp else 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    // Track title: bottom-aligned in upper half → extra lines grow upward
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.BottomCenter,
+                    ) {
+                        Text(
+                            text = uiState.title.ifBlank { "Unknown track" },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = TEXT_ANCHOR_GAP),
+                            style = overlayTitleStyle(
+                                MaterialTheme.typography.title3.copy(
+                                    fontSize = 17.sp,
+                                    lineHeight = 20.sp,
+                                ),
+                            ),
+                            textAlign = TextAlign.Center,
+                            softWrap = true,
+                            maxLines = 24,
+                            overflow = TextOverflow.Visible,
+                        )
+                    }
+
+                    MediaTransportControlsRow(
+                        rowHeight = MEDIA_CONTROL_ROW_HEIGHT,
+                        isPlaying = uiState.isPlaying,
+                        canTogglePlayback = canTogglePlayback,
+                        canSkipPrevious = canSkipPrevious,
+                        canSkipNext = canSkipNext,
+                        onTogglePlayback = onTogglePlayback,
+                        onSkipPrevious = onSkipPrevious,
+                        onSkipNext = onSkipNext,
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(top = TEXT_ANCHOR_GAP),
+                        contentAlignment = Alignment.TopCenter,
+                    ) {
+                        if (albumOrShow.isNotBlank()) {
+                            Text(
+                                text = albumOrShow,
+                                style = overlayBodyStyle(MaterialTheme.typography.body2),
+                                textAlign = TextAlign.Center,
+                                softWrap = true,
+                                maxLines = 16,
+                                overflow = TextOverflow.Visible,
+                            )
+                        }
+                    }
+                }
+
+                if (uiState.sessionCount > 1) {
+                    SessionPageDots(
+                        selectedIndexOneBased = uiState.sessionIndex,
+                        pageCount = uiState.sessionCount,
+                        vertical = true,
+                        modifier = Modifier.padding(start = 2.dp, end = 6.dp),
+                    )
                 }
             }
         }
@@ -405,30 +586,47 @@ private fun SessionPageDots(
     selectedIndexOneBased: Int,
     pageCount: Int,
     modifier: Modifier = Modifier,
+    vertical: Boolean = false,
 ) {
     if (pageCount <= 1) return
     val selectedZero = (selectedIndexOneBased - 1).coerceIn(0, pageCount - 1)
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        repeat(pageCount) { index ->
-            val filled = index == selectedZero
-            Box(
-                modifier = Modifier
-                    .size(if (filled) 8.dp else 6.dp)
-                    .clip(CircleShape)
-                    .then(
-                        if (filled) {
-                            Modifier.background(MaterialTheme.colors.primary.copy(alpha = 0.92f))
-                        } else {
-                            Modifier
-                                .border(1.5.dp, Color.White.copy(alpha = 0.55f), CircleShape)
-                                .background(Color.White.copy(alpha = 0.12f))
-                        },
-                    ),
-            )
+    @Composable
+    fun Dot(index: Int) {
+        val filled = index == selectedZero
+        Box(
+            modifier = Modifier
+                .size(if (filled) 8.dp else 6.dp)
+                .clip(CircleShape)
+                .then(
+                    if (filled) {
+                        Modifier.background(MaterialTheme.colors.primary.copy(alpha = 0.92f))
+                    } else {
+                        Modifier
+                            .border(1.5.dp, Color.White.copy(alpha = 0.55f), CircleShape)
+                            .background(Color.White.copy(alpha = 0.12f))
+                    },
+                ),
+        )
+    }
+    if (vertical) {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            repeat(pageCount) { index ->
+                Dot(index)
+            }
+        }
+    } else {
+        Row(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            repeat(pageCount) { index ->
+                Dot(index)
+            }
         }
     }
 }

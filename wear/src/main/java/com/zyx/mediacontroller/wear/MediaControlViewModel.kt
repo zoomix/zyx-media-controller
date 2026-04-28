@@ -3,6 +3,7 @@ package se.kvrgic.mediawristremote.wear
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import com.google.android.gms.wearable.Wearable
+import kotlin.text.Charsets
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,7 @@ data class PlayerUiState(
     val connectionStatus: MediaConnectionStatus? = null,
     val artworkToken: String = "",
     val artworkBase64: String = "",
+    val sessionCarousel: List<SessionCarouselEntry> = emptyList(),
 )
 
 class MediaControlViewModel(application: Application) : AndroidViewModel(application) {
@@ -73,6 +75,26 @@ class MediaControlViewModel(application: Application) : AndroidViewModel(applica
         sendCommand(MediaCommand.SELECT_PREVIOUS_SESSION)
     }
 
+    fun selectSessionAt(indexOneBased: Int) {
+        if (indexOneBased <= 0) return
+        val payload = "${SELECT_SESSION_INDEX_PREFIX}$indexOneBased".toByteArray(Charsets.UTF_8)
+        nodeClient.connectedNodes
+            .addOnSuccessListener { nodes ->
+                if (nodes.isEmpty()) {
+                    _uiState.value = _uiState.value.copy(isPhoneReachable = false)
+                    return@addOnSuccessListener
+                }
+
+                _uiState.value = _uiState.value.copy(isPhoneReachable = true)
+                for (node in nodes) {
+                    messageClient.sendMessage(node.id, MediaProtocol.commandPath, payload)
+                }
+            }
+            .addOnFailureListener {
+                _uiState.value = _uiState.value.copy(isPhoneReachable = false)
+            }
+    }
+
     private fun sendCommand(command: MediaCommand) {
         nodeClient.connectedNodes
             .addOnSuccessListener { nodes ->
@@ -108,6 +130,7 @@ class MediaControlViewModel(application: Application) : AndroidViewModel(applica
             connectionStatus = payload.connectionStatus,
             artworkToken = payload.artworkToken,
             artworkBase64 = payload.artworkBase64,
+            sessionCarousel = payload.sessionCarousel,
         )
     }
 

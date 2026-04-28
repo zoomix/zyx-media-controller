@@ -25,6 +25,11 @@ class MediaSessionListenerService : NotificationListenerService() {
     private var cachedArtworkKey: String = ""
     private var cachedArtworkBase64: String = ""
     private var cachedArtworkToken: String = ""
+    private var carouselCacheKey: String = ""
+    private var carouselCacheEntries: List<SessionCarouselEntry> = emptyList()
+
+    private fun List<SessionCarouselEntry>.hasCompleteArtwork(): Boolean =
+        isNotEmpty() && all { it.artworkBase64.isNotBlank() }
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) {
@@ -168,7 +173,14 @@ class MediaSessionListenerService : NotificationListenerService() {
         cachedArtworkKey = ""
         cachedArtworkBase64 = ""
         cachedArtworkToken = ""
+        carouselCacheKey = ""
+        carouselCacheEntries = emptyList()
     }
+
+    private fun carouselIdentity(controllers: List<MediaController>): String =
+        controllers.joinToString("\u0002") { ctrl ->
+            "${ctrl.sessionToken.hashCode()}\u0001${ctrl.metadata?.artworkCacheKey().orEmpty()}"
+        }
 
     private fun publishCurrentState() {
         val controller = activeController
@@ -189,13 +201,15 @@ class MediaSessionListenerService : NotificationListenerService() {
         val controllers = runCatching {
             sessionManager.getActiveSessions(ComponentName(this, javaClass))
         }.getOrElse { emptyList() }
-        val selectedIndex = controllers.indexOfFirst { it.sessionToken == controller.sessionToken }
-            .takeIf { it >= 0 } ?: 0
-
         val artKey = metadata.artworkCacheKey()
         val gen = ++statePublishGeneration
+        val carKey = carouselIdentity(controllers)
 
-        fun buildPayload(artworkBase64: String, artworkToken: String): MediaStatePayload {
+        fun buildPayload(
+            artworkBase64: String,
+            artworkToken: String,
+            sessionCarousel: List<SessionCarouselEntry>,
+        ): MediaStatePayload {
             val c = activeController ?: controller
             val md = c.metadata
             val pb = c.playbackState
@@ -217,17 +231,50 @@ class MediaSessionListenerService : NotificationListenerService() {
                 sessionCount = ctrls.size,
                 artworkToken = artworkToken,
                 artworkBase64 = artworkBase64,
+                sessionCarousel = sessionCarousel,
             )
         }
 
-        if (artKey == cachedArtworkKey && artKey.isNotEmpty()) {
-            val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken)
+        if (controllers.size <= 1 && artKey == cachedArtworkKey && artKey.isNotEmpty()) {
+            val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken, emptyList())
+            MediaStatePublisher.publish(this, payload)
+            schedulePositionUpdates(payload.isPlaying)
+            return
+        }
+
+        if (controllers.size > 1 &&
+            carKey == carouselCacheKey &&
+            carouselCacheEntries.hasCompleteArtwork() &&
+            artKey == cachedArtworkKey &&
+            artKey.isNotEmpty()
+        ) {
+            val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken, carouselCacheEntries)
             MediaStatePublisher.publish(this, payload)
             schedulePositionUpdates(payload.isPlaying)
             return
         }
 
         artworkDecodeExecutor.execute {
+            val ctrlsSnapshot = controllers
+            val carKeySnapshot = carouselIdentity(ctrlsSnapshot)
+            val carousel: List<SessionCarouselEntry> = if (ctrlsSnapshot.size <= 1) {
+                emptyList()
+            } else if (
+                carKeySnapshot == carouselCacheKey &&
+                carouselCacheEntries.hasCompleteArtwork()
+            ) {
+                carouselCacheEntries
+            } else {
+                MediaSessionCarouselBuilder.buildEntries(
+                    ctrlsSnapshot,
+                    applicationContext,
+                    ::appNameFor,
+                ).also { built ->
+                    carouselCacheKey = carKeySnapshot
+                    carouselCacheEntries = built
+                }
+            }
+
             val bmp = metadata?.artworkBitmap(applicationContext)
             val b64 = WearMediaArtworkSync.encode(bmp)
             val token = bmp?.let { bmpNonNull ->
@@ -239,7 +286,7 @@ class MediaSessionListenerService : NotificationListenerService() {
                 cachedArtworkKey = artKey
                 cachedArtworkBase64 = b64
                 cachedArtworkToken = token
-                val payload = buildPayload(b64, token)
+                val payload = buildPayload(b64, token, carousel)
                 MediaStatePublisher.publish(this@MediaSessionListenerService, payload)
                 schedulePositionUpdates(payload.isPlaying)
             }

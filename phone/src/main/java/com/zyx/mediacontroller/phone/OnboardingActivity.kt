@@ -344,6 +344,12 @@ class OnboardingActivity : ComponentActivity() {
         val playbackState = playbackState
         val selectedIndex = controllers.indexOfFirst { it.sessionToken == sessionToken }.takeIf { it >= 0 } ?: 0
         val artworkBmp = metadata.artworkBitmap(this@OnboardingActivity)
+        val carousel =
+            if (controllers.size > 1) {
+                MediaSessionCarouselBuilder.buildEntries(controllers, this@OnboardingActivity, ::appNameFor)
+            } else {
+                emptyList()
+            }
         return MediaStatePayload(
             connectionStatus = MediaConnectionStatus.READY,
             title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
@@ -358,6 +364,7 @@ class OnboardingActivity : ComponentActivity() {
             sessionCount = controllers.size,
             artworkToken = artworkBmp?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
             artworkBase64 = WearMediaArtworkSync.encode(artworkBmp),
+            sessionCarousel = carousel,
         )
     }
 

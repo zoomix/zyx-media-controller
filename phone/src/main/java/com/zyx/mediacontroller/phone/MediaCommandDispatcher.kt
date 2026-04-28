@@ -31,6 +31,7 @@ object MediaCommandDispatcher {
             MediaCommand.PREVIOUS -> previous(context, controller, skipButtonMode, onStateMayHaveChanged)
             MediaCommand.SELECT_NEXT_SESSION,
             MediaCommand.SELECT_PREVIOUS_SESSION,
+            MediaCommand.SELECT_SESSION_INDEX,
             -> onStateMayHaveChanged()
         }
     }

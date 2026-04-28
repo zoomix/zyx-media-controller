@@ -13,6 +13,11 @@ object WearMediaArtworkSync {
     private const val JPEG_QUALITY = 72
     private const val MAX_BASE64_LENGTH = 45_000
 
+    /** Compact tiles for session carousel previews (many sessions in one Wear DataItem payload). */
+    private const val CAROUSEL_MAX_EDGE_PX = 108
+    private const val CAROUSEL_JPEG_QUALITY = 68
+    private const val CAROUSEL_MAX_BASE64_LENGTH = 14_000
+
     fun encode(bitmap: Bitmap?): String {
         if (bitmap == null || bitmap.isRecycled) return ""
         val scaled = scaleDown(bitmap, MAX_EDGE_PX)
@@ -27,6 +32,22 @@ object WearMediaArtworkSync {
         }
         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
         return if (b64.length <= MAX_BASE64_LENGTH) b64 else ""
+    }
+
+    fun encodeCarouselTile(bitmap: Bitmap?): String {
+        if (bitmap == null || bitmap.isRecycled) return ""
+        val scaled = scaleDown(bitmap, CAROUSEL_MAX_EDGE_PX)
+        val bytes = ByteArrayOutputStream().use { out ->
+            if (!scaled.compress(Bitmap.CompressFormat.JPEG, CAROUSEL_JPEG_QUALITY, out)) {
+                return ""
+            }
+            out.toByteArray()
+        }
+        if (scaled !== bitmap) {
+            scaled.recycle()
+        }
+        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        return if (b64.length <= CAROUSEL_MAX_BASE64_LENGTH) b64 else ""
     }
 
     private fun scaleDown(source: Bitmap, maxEdge: Int): Bitmap {

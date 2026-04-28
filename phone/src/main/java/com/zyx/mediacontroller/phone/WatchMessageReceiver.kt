@@ -16,6 +16,14 @@ class WatchMessageReceiver : WearableListenerService() {
 
         val command = MediaCommand.fromPayload(messageEvent.data) ?: return
         val controllers = activeMediaControllers()
+
+        if (command == MediaCommand.SELECT_SESSION_INDEX) {
+            val index = MediaCommand.payloadSessionIndexOneBased(messageEvent.data) ?: return
+            MediaControllerRegistry.selectSessionAtOneBased(controllers, index) ?: return
+            MediaSessionListenerService.syncActiveSessionFromRegistry(this)
+            return
+        }
+
         val controller = when (command) {
             MediaCommand.SELECT_NEXT_SESSION -> {
                 MediaControllerRegistry.selectNextController(controllers)

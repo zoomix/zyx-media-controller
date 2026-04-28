@@ -55,6 +55,19 @@ object MediaControllerRegistry {
         return selectRelativeController(controllers, step = -1)
     }
 
+    fun selectSessionAtOneBased(controllers: List<MediaController>, indexOneBased: Int): MediaController? {
+        if (controllers.isEmpty()) return null
+        val idx = indexOneBased - 1
+        if (idx !in controllers.indices) return null
+        return synchronized(lock) {
+            sessionTokens = controllers.map { it.sessionToken }
+            controllers[idx].also { controller ->
+                preferredSessionToken = controller.sessionToken
+                activeController = controller
+            }
+        }
+    }
+
     private fun selectRelativeController(
         controllers: List<MediaController>,
         step: Int,

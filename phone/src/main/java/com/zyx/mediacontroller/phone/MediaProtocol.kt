@@ -1,5 +1,6 @@
 package se.kvrgic.mediawristremote.phone
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 object MediaProtocol {
@@ -9,6 +10,8 @@ object MediaProtocol {
     const val updatedAtKey = "updatedAt"
 }
 
+const val SELECT_SESSION_INDEX_PREFIX = "SELECT_SESSION_INDEX:"
+
 enum class MediaCommand {
     PLAY,
     PAUSE,
@@ -17,6 +20,7 @@ enum class MediaCommand {
     PREVIOUS,
     SELECT_NEXT_SESSION,
     SELECT_PREVIOUS_SESSION,
+    SELECT_SESSION_INDEX,
     ;
 
     fun toPayload(): ByteArray = name.toByteArray(Charsets.UTF_8)
@@ -24,7 +28,17 @@ enum class MediaCommand {
     companion object {
         fun fromPayload(payload: ByteArray): MediaCommand? {
             val rawValue = payload.toString(Charsets.UTF_8)
+            if (rawValue.startsWith(SELECT_SESSION_INDEX_PREFIX)) {
+                return SELECT_SESSION_INDEX
+            }
             return entries.firstOrNull { it.name == rawValue }
+        }
+
+        /** 1-based session index matching [MediaStatePayload.sessionIndex]. */
+        fun payloadSessionIndexOneBased(payload: ByteArray): Int? {
+            val raw = payload.toString(Charsets.UTF_8)
+            if (!raw.startsWith(SELECT_SESSION_INDEX_PREFIX)) return null
+            return raw.removePrefix(SELECT_SESSION_INDEX_PREFIX).toIntOrNull()
         }
     }
 }
@@ -33,6 +47,24 @@ enum class MediaConnectionStatus {
     PERMISSION_REQUIRED,
     NO_SESSION,
     READY,
+}
+
+data class SessionCarouselEntry(
+    val title: String = "",
+    val artist: String = "",
+    val appName: String = "",
+    val appPackageName: String = "",
+    val artworkToken: String = "",
+    val artworkBase64: String = "",
+) {
+    fun toJsonObject(): JSONObject =
+        JSONObject()
+            .put("title", title)
+            .put("artist", artist)
+            .put("appName", appName)
+            .put("appPackageName", appPackageName)
+            .put("artworkToken", artworkToken)
+            .put("artworkBase64", artworkBase64)
 }
 
 data class MediaStatePayload(
@@ -50,8 +82,13 @@ data class MediaStatePayload(
     val artworkToken: String = "",
     /** JPEG (Base64) for watch cover art; empty if too large or unavailable. */
     val artworkBase64: String = "",
+    /** One entry per active session for wear carousel previews (aligned with active session ordering). */
+    val sessionCarousel: List<SessionCarouselEntry> = emptyList(),
 ) {
     fun toJson(): String {
+        val carouselArr = JSONArray()
+        sessionCarousel.forEach { entry -> carouselArr.put(entry.toJsonObject()) }
+
         return JSONObject()
             .put("connectionStatus", connectionStatus.name)
             .put("title", title)
@@ -66,6 +103,7 @@ data class MediaStatePayload(
             .put("sessionCount", sessionCount)
             .put("artworkToken", artworkToken)
             .put("artworkBase64", artworkBase64)
+            .put("sessionCarousel", carouselArr)
             .toString()
     }
 }
