@@ -48,6 +48,8 @@ data class MediaStatePayload(
     val sessionIndex: Int = 0,
     val sessionCount: Int = 0,
     val artworkToken: String = "",
+    /** JPEG (Base64) for watch cover art; empty if too large or unavailable. */
+    val artworkBase64: String = "",
 ) {
     fun toJson(): String {
         return JSONObject()
@@ -63,6 +65,7 @@ data class MediaStatePayload(
             .put("sessionIndex", sessionIndex)
             .put("sessionCount", sessionCount)
             .put("artworkToken", artworkToken)
+            .put("artworkBase64", artworkBase64)
             .toString()
     }
 }

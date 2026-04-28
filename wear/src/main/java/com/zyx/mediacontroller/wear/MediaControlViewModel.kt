@@ -21,6 +21,8 @@ data class PlayerUiState(
     val isPhoneReachable: Boolean = false,
     val hasLoadedState: Boolean = false,
     val connectionStatus: MediaConnectionStatus? = null,
+    val artworkToken: String = "",
+    val artworkBase64: String = "",
 )
 
 class MediaControlViewModel(application: Application) : AndroidViewModel(application) {
@@ -104,6 +106,8 @@ class MediaControlViewModel(application: Application) : AndroidViewModel(applica
             isPhoneReachable = true,
             hasLoadedState = true,
             connectionStatus = payload.connectionStatus,
+            artworkToken = payload.artworkToken,
+            artworkBase64 = payload.artworkBase64,
         )
     }
 

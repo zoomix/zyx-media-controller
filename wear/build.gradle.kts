@@ -11,8 +11,8 @@ android {
         applicationId = "se.kvrgic.mediawristremote"
         minSdk = 30
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     buildTypes {
@@ -60,6 +60,7 @@ dependencies {
     implementation("androidx.wear.compose:compose-foundation:1.3.1")
     implementation("androidx.wear.compose:compose-material:1.3.1")
     implementation("androidx.wear.compose:compose-navigation:1.3.1")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.media:media:1.7.0")
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
 

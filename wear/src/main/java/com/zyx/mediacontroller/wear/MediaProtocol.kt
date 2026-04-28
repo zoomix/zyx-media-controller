@@ -40,6 +40,7 @@ data class MediaStatePayload(
     val sessionIndex: Int = 0,
     val sessionCount: Int = 0,
     val artworkToken: String = "",
+    val artworkBase64: String = "",
 ) {
     companion object {
         fun fromJson(json: String): MediaStatePayload {
@@ -59,6 +60,7 @@ data class MediaStatePayload(
                 sessionIndex = payload.optInt("sessionIndex"),
                 sessionCount = payload.optInt("sessionCount"),
                 artworkToken = payload.optString("artworkToken"),
+                artworkBase64 = payload.optString("artworkBase64"),
             )
         }
     }

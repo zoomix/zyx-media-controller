@@ -159,6 +159,13 @@ class MediaSessionListenerService : NotificationListenerService() {
         val metadata = controller.metadata
         val playbackState = controller.playbackState
 
+        val controllers = runCatching {
+            sessionManager.getActiveSessions(ComponentName(this, javaClass))
+        }.getOrElse { emptyList() }
+        val selectedIndex = controllers.indexOfFirst { it.sessionToken == controller.sessionToken }
+            .takeIf { it >= 0 } ?: 0
+
+        val bitmap = metadata?.artworkBitmap()
         val payload = MediaStatePayload(
             connectionStatus = MediaConnectionStatus.READY,
             title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
@@ -169,6 +176,12 @@ class MediaSessionListenerService : NotificationListenerService() {
             duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
             position = playbackState?.position ?: 0L,
             availableActions = playbackState?.actions ?: 0L,
+            sessionIndex = selectedIndex + 1,
+            sessionCount = controllers.size,
+            artworkToken = bitmap?.let { bmp ->
+                "${controller.packageName}:${metadata.hashCode()}:${bmp.width}x${bmp.height}"
+            }.orEmpty(),
+            artworkBase64 = WearMediaArtworkSync.encode(bitmap),
         )
 
         MediaStatePublisher.publish(this, payload)

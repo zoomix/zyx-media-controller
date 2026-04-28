@@ -354,6 +354,7 @@ class OnboardingActivity : ComponentActivity() {
             sessionIndex = selectedIndex + 1,
             sessionCount = controllers.size,
             artworkToken = metadata.artworkBitmap()?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
+            artworkBase64 = WearMediaArtworkSync.encode(metadata.artworkBitmap()),
         )
     }
 
@@ -1175,13 +1176,6 @@ private fun resolvedAppDisplayName(context: Context, app: PlayedApp): String {
     if (persisted.isNotEmpty() && persisted != app.packageName) return persisted
     if (!fromPm.isNullOrBlank()) return fromPm
     return persisted.ifBlank { app.packageName }
-}
-
-private fun MediaMetadata?.artworkBitmap(): Bitmap? {
-    if (this == null) return null
-    return getBitmap(MediaMetadata.METADATA_KEY_ART)
-        ?: getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-        ?: getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
 }
 
 private fun formatTime(milliseconds: Long): String {

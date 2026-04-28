@@ -92,6 +92,8 @@ class WatchMessageReceiver : WearableListenerService() {
             availableActions = playbackState?.actions ?: 0L,
             sessionIndex = selectedIndex + 1,
             sessionCount = controllers.size,
+            artworkToken = metadata.artworkBitmap()?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
+            artworkBase64 = WearMediaArtworkSync.encode(metadata.artworkBitmap()),
         )
     }
 
