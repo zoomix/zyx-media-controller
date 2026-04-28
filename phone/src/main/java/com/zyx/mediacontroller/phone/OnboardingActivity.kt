@@ -13,11 +13,9 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -36,6 +34,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
+data class PlayerSessionOption(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val stateLabel: String,
+)
+
 data class PhonePlayerUiState(
     val notificationAccessEnabled: Boolean = false,
     val title: String = "",
@@ -46,11 +51,15 @@ data class PhonePlayerUiState(
     val position: Long = 0L,
     val availableActions: Long = 0L,
     val hasSession: Boolean = false,
+    val sessionOptions: List<PlayerSessionOption> = emptyList(),
+    val selectedSessionId: String = "",
+    val isManualSelection: Boolean = false,
 )
 
 class OnboardingActivity : ComponentActivity() {
     private val sessionManager by lazy { getSystemService(MediaSessionManager::class.java) }
     private var activeController: MediaController? = null
+    private var latestControllers: List<MediaController> = emptyList()
     private var uiState by mutableStateOf(PhonePlayerUiState())
 
     private val controllerCallback = object : MediaController.Callback() {
@@ -80,6 +89,8 @@ class OnboardingActivity : ComponentActivity() {
                         onTogglePlayback = ::togglePlayback,
                         onSkipPrevious = ::skipPrevious,
                         onSkipNext = ::skipNext,
+                        onSelectSession = ::selectSession,
+                        onClearPreferredSession = ::clearPreferredSession,
                     )
                 }
             }
@@ -108,14 +119,23 @@ class OnboardingActivity : ComponentActivity() {
             return
         }
 
-        val controllers = runCatching {
+        val controllers = activeSessions()
+        latestControllers = controllers
+
+        val controller = MediaControllerRegistry.preferredControllerFrom(controllers)
+            ?: chooseBestController(controllers)
+        selectController(controller)
+        uiState = controller.toUiState(
+            notificationAccessEnabled = true,
+            controllers = controllers,
+        )
+        MediaStatePublisher.publish(this, controller.toMediaStatePayload())
+    }
+
+    private fun activeSessions(): List<MediaController> {
+        return runCatching {
             sessionManager.getActiveSessions(ComponentName(this, MediaSessionListenerService::class.java))
         }.getOrDefault(emptyList())
-
-        val controller = chooseBestController(controllers)
-        selectController(controller)
-        uiState = controller.toUiState(notificationAccessEnabled = true)
-        MediaStatePublisher.publish(this, controller.toMediaStatePayload())
     }
 
     private fun openNotificationAccessSettings() {
@@ -142,18 +162,41 @@ class OnboardingActivity : ComponentActivity() {
         refreshState()
     }
 
+    private fun selectSession(sessionId: String) {
+        val controller = latestControllers.firstOrNull { it.sessionId() == sessionId }
+            ?: activeSessions().firstOrNull { it.sessionId() == sessionId }
+            ?: return
+
+        MediaControllerRegistry.selectPreferredController(controller)
+        selectController(controller)
+        refreshState()
+    }
+
+    private fun clearPreferredSession() {
+        MediaControllerRegistry.clearPreferredController()
+        refreshState()
+    }
+
     private fun selectController(controller: MediaController?) {
         if (activeController?.sessionToken == controller?.sessionToken) return
 
         activeController?.unregisterCallback(controllerCallback)
         activeController = controller
-        MediaControllerRegistry.activeController = controller
+        MediaControllerRegistry.updateActiveController(controller)
         controller?.registerCallback(controllerCallback)
     }
 
-    private fun MediaController?.toUiState(notificationAccessEnabled: Boolean): PhonePlayerUiState {
+    private fun MediaController?.toUiState(
+        notificationAccessEnabled: Boolean,
+        controllers: List<MediaController>,
+    ): PhonePlayerUiState {
+        val sessionOptions = controllers.map { it.toSessionOption() }
         if (this == null) {
-            return PhonePlayerUiState(notificationAccessEnabled = notificationAccessEnabled)
+            return PhonePlayerUiState(
+                notificationAccessEnabled = notificationAccessEnabled,
+                sessionOptions = sessionOptions,
+                isManualSelection = MediaControllerRegistry.hasPreferredController(),
+            )
         }
 
         val metadata = metadata
@@ -168,6 +211,29 @@ class OnboardingActivity : ComponentActivity() {
             position = playbackState?.position ?: 0L,
             availableActions = playbackState?.actions ?: 0L,
             hasSession = true,
+            sessionOptions = sessionOptions,
+            selectedSessionId = sessionId(),
+            isManualSelection = MediaControllerRegistry.hasPreferredController(),
+        )
+    }
+
+    private fun MediaController.toSessionOption(): PlayerSessionOption {
+        val metadata = metadata
+        val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
+            ?.takeIf { it.isNotBlank() }
+            ?: appNameFor(packageName)
+        val subtitle = listOf(
+            metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
+            appNameFor(packageName),
+        )
+            .filter { it.isNotBlank() && it != title }
+            .joinToString(" - ")
+
+        return PlayerSessionOption(
+            id = sessionId(),
+            title = title,
+            subtitle = subtitle.ifBlank { packageName },
+            stateLabel = playbackState?.state.toPlaybackStateLabel(),
         )
     }
 
@@ -217,6 +283,8 @@ class OnboardingActivity : ComponentActivity() {
             packageManager.getApplicationLabel(applicationInfo).toString()
         }.getOrDefault(packageName)
     }
+
+    private fun MediaController.sessionId(): String = "$packageName:${sessionToken.hashCode()}"
 }
 
 @Composable
@@ -227,6 +295,8 @@ private fun PhoneControllerScreen(
     onTogglePlayback: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
+    onSelectSession: (String) -> Unit,
+    onClearPreferredSession: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -278,6 +348,16 @@ private fun PhoneControllerScreen(
                     Text("Start playback in any media app, then refresh.")
                 }
             }
+        }
+
+        if (uiState.notificationAccessEnabled) {
+            SessionPickerCard(
+                sessionOptions = uiState.sessionOptions,
+                selectedSessionId = uiState.selectedSessionId,
+                isManualSelection = uiState.isManualSelection,
+                onSelectSession = onSelectSession,
+                onClearPreferredSession = onClearPreferredSession,
+            )
         }
 
         Row(
@@ -354,6 +434,94 @@ private fun PermissionCard(
     }
 }
 
+@Composable
+private fun SessionPickerCard(
+    sessionOptions: List<PlayerSessionOption>,
+    selectedSessionId: String,
+    isManualSelection: Boolean,
+    onSelectSession: (String) -> Unit,
+    onClearPreferredSession: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "Instruction target",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = if (isManualSelection) {
+                    "Watch and phone controls are sent to the selected session."
+                } else {
+                    "Auto-selecting the most active session."
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            if (sessionOptions.isEmpty()) {
+                Text("No media sessions available.")
+            } else {
+                sessionOptions.forEach { option ->
+                    SessionOptionRow(
+                        option = option,
+                        isSelected = option.id == selectedSessionId,
+                        onSelectSession = onSelectSession,
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = onClearPreferredSession,
+                enabled = isManualSelection,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Auto-select target")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionOptionRow(
+    option: PlayerSessionOption,
+    isSelected: Boolean,
+    onSelectSession: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = option.title,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(text = option.subtitle)
+                Text(
+                    text = option.stateLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            Button(
+                onClick = { onSelectSession(option.id) },
+                enabled = !isSelected,
+            ) {
+                Text(if (isSelected) "Selected" else "Use")
+            }
+        }
+    }
+}
+
 private fun formatTime(milliseconds: Long): String {
     if (milliseconds <= 0L) return "0:00"
     val totalSeconds = milliseconds / 1000L
@@ -378,3 +546,19 @@ private fun actionSummary(actions: Long): String {
 }
 
 private infix fun Long.hasAction(action: Long): Boolean = this and action != 0L
+
+private fun Int?.toPlaybackStateLabel(): String {
+    return when (this) {
+        PlaybackState.STATE_PLAYING -> "Playing"
+        PlaybackState.STATE_BUFFERING -> "Buffering"
+        PlaybackState.STATE_PAUSED -> "Paused"
+        PlaybackState.STATE_STOPPED -> "Stopped"
+        PlaybackState.STATE_FAST_FORWARDING -> "Fast forwarding"
+        PlaybackState.STATE_REWINDING -> "Rewinding"
+        PlaybackState.STATE_SKIPPING_TO_NEXT -> "Skipping to next"
+        PlaybackState.STATE_SKIPPING_TO_PREVIOUS -> "Skipping to previous"
+        PlaybackState.STATE_NONE -> "Inactive"
+        null -> "Unknown state"
+        else -> "Active"
+    }
+}

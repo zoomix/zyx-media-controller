@@ -42,7 +42,8 @@ class WatchMessageReceiver : WearableListenerService() {
             sessionManager.getActiveSessions(ComponentName(this, MediaSessionListenerService::class.java))
         }.getOrDefault(emptyList())
 
-        return controllers
+        return MediaControllerRegistry.preferredControllerFrom(controllers)
+            ?: controllers
             .filter { controller ->
                 val state = controller.playbackState?.state
                 state != null && state != PlaybackState.STATE_NONE

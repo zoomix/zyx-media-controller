@@ -104,7 +104,8 @@ class MediaSessionListenerService : NotificationListenerService() {
     }
 
     private fun selectActiveController(controllers: List<MediaController>) {
-        val nextController = chooseBestController(controllers)
+        val nextController = MediaControllerRegistry.preferredControllerFrom(controllers)
+            ?: chooseBestController(controllers)
 
         if (activeController?.sessionToken == nextController?.sessionToken) {
             publishCurrentState()
@@ -113,7 +114,7 @@ class MediaSessionListenerService : NotificationListenerService() {
 
         activeController?.unregisterCallback(controllerCallback)
         activeController = nextController
-        MediaControllerRegistry.activeController = nextController
+        MediaControllerRegistry.updateActiveController(nextController)
 
         if (nextController == null) {
             stopPositionUpdates()
@@ -160,7 +161,7 @@ class MediaSessionListenerService : NotificationListenerService() {
     private fun clearActiveController() {
         activeController?.unregisterCallback(controllerCallback)
         activeController = null
-        MediaControllerRegistry.activeController = null
+        MediaControllerRegistry.updateActiveController(null)
         stopPositionUpdates()
     }
 
