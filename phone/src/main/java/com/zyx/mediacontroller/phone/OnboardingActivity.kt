@@ -11,6 +11,9 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -61,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +73,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +81,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 private enum class PhoneScreen { HOME, APP_CONTROLS, DIAGNOSTICS }
@@ -621,30 +627,75 @@ private fun ArtworkHeader(
     onSelectSession: (String) -> Unit,
 ) {
     var dragTotal by remember { mutableStateOf(0f) }
+    val artworkOffset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
     BoxWithConstraints(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
+        val maxDrag = constraints.maxWidth * 0.42f
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(30.dp))
                 .background(MaterialTheme.colorScheme.primaryContainer)
+                .graphicsLayer {
+                    val progress = (abs(artworkOffset.value) / maxDrag.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    translationX = artworkOffset.value
+                    alpha = 1f - (progress * 0.18f)
+                    scaleX = 1f - (progress * 0.04f)
+                    scaleY = 1f - (progress * 0.04f)
+                }
                 .pointerInput(uiState.activeSessions, uiState.selectedSessionId) {
                     detectHorizontalDragGestures(
-                        onDragStart = { dragTotal = 0f },
-                        onHorizontalDrag = { _, dragAmount -> dragTotal += dragAmount },
+                        onDragStart = {
+                            dragTotal = 0f
+                            scope.launch { artworkOffset.stop() }
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            dragTotal += dragAmount
+                            val nextOffset = (artworkOffset.value + dragAmount).coerceIn(-maxDrag, maxDrag)
+                            scope.launch { artworkOffset.snapTo(nextOffset) }
+                        },
                         onDragEnd = {
                             if (abs(dragTotal) > SWIPE_THRESHOLD_PX) {
-                                selectAdjacentSession(
-                                    activeSessions = uiState.activeSessions,
-                                    selectedSessionId = uiState.selectedSessionId,
-                                    direction = if (dragTotal < 0f) 1 else -1,
-                                    onSelectSession = onSelectSession,
-                                )
+                                val direction = if (dragTotal < 0f) 1 else -1
+                                scope.launch {
+                                    artworkOffset.animateTo(
+                                        targetValue = if (direction > 0) -constraints.maxWidth.toFloat() else constraints.maxWidth.toFloat(),
+                                        animationSpec = tween(durationMillis = 160),
+                                    )
+                                    selectAdjacentSession(
+                                        activeSessions = uiState.activeSessions,
+                                        selectedSessionId = uiState.selectedSessionId,
+                                        direction = direction,
+                                        onSelectSession = onSelectSession,
+                                    )
+                                    artworkOffset.snapTo(if (direction > 0) constraints.maxWidth.toFloat() else -constraints.maxWidth.toFloat())
+                                    artworkOffset.animateTo(
+                                        targetValue = 0f,
+                                        animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                                    )
+                                }
+                            } else {
+                                scope.launch {
+                                    artworkOffset.animateTo(
+                                        targetValue = 0f,
+                                        animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
+                                    )
+                                }
                             }
                             dragTotal = 0f
+                        },
+                        onDragCancel = {
+                            dragTotal = 0f
+                            scope.launch {
+                                artworkOffset.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
+                                )
+                            }
                         },
                     )
                 },
