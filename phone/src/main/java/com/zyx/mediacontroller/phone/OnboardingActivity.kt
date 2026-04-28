@@ -237,11 +237,13 @@ class OnboardingActivity : ComponentActivity() {
             ?: return
         MediaControllerRegistry.selectPreferredController(controller)
         selectController(controller)
+        MediaSessionListenerService.syncActiveSessionFromRegistry(this)
         refreshState()
     }
 
     private fun clearPreferredSession() {
         MediaControllerRegistry.clearPreferredController()
+        MediaSessionListenerService.syncActiveSessionFromRegistry(this)
         refreshState()
     }
 
@@ -261,7 +263,7 @@ class OnboardingActivity : ComponentActivity() {
     private fun buildSessionPreviewArt(controllers: List<MediaController>): Map<String, Bitmap?> {
         if (controllers.isEmpty()) return emptyMap()
         return controllers.associate { controller ->
-            controller.sessionId() to controller.metadata.artworkBitmap()
+            controller.sessionId() to controller.metadata.artworkBitmap(this@OnboardingActivity)
         }
     }
 
@@ -285,7 +287,7 @@ class OnboardingActivity : ComponentActivity() {
 
         val metadata = metadata
         val playbackState = playbackState
-        val artwork = metadata.artworkBitmap()
+        val artwork = metadata.artworkBitmap(this@OnboardingActivity)
         val selectedIndex = controllers.indexOfFirst { it.sessionToken == sessionToken }.takeIf { it >= 0 } ?: 0
         return PhonePlayerUiState(
             notificationAccessEnabled = notificationAccessEnabled,
@@ -341,6 +343,7 @@ class OnboardingActivity : ComponentActivity() {
         val metadata = metadata
         val playbackState = playbackState
         val selectedIndex = controllers.indexOfFirst { it.sessionToken == sessionToken }.takeIf { it >= 0 } ?: 0
+        val artworkBmp = metadata.artworkBitmap(this@OnboardingActivity)
         return MediaStatePayload(
             connectionStatus = MediaConnectionStatus.READY,
             title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
@@ -353,8 +356,8 @@ class OnboardingActivity : ComponentActivity() {
             availableActions = playbackState?.actions ?: 0L,
             sessionIndex = selectedIndex + 1,
             sessionCount = controllers.size,
-            artworkToken = metadata.artworkBitmap()?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
-            artworkBase64 = WearMediaArtworkSync.encode(metadata.artworkBitmap()),
+            artworkToken = artworkBmp?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
+            artworkBase64 = WearMediaArtworkSync.encode(artworkBmp),
         )
     }
 

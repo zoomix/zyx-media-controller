@@ -1,6 +1,8 @@
 package se.kvrgic.mediawristremote.phone
 
 import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -8,6 +10,7 @@ import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.service.notification.NotificationListenerService
+import java.util.concurrent.Executors
 import android.service.notification.StatusBarNotification
 import android.util.Log
 
@@ -16,6 +19,12 @@ class MediaSessionListenerService : NotificationListenerService() {
     private val sessionManager by lazy { getSystemService(MediaSessionManager::class.java) }
 
     private var activeController: MediaController? = null
+
+    private val artworkDecodeExecutor = Executors.newSingleThreadExecutor()
+    private var statePublishGeneration = 0L
+    private var cachedArtworkKey: String = ""
+    private var cachedArtworkBase64: String = ""
+    private var cachedArtworkToken: String = ""
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) {
@@ -48,6 +57,7 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         publishPermissionStateIfNeeded()
     }
 
@@ -75,8 +85,16 @@ class MediaSessionListenerService : NotificationListenerService() {
         runCatching {
             sessionManager.removeOnActiveSessionsChangedListener(activeSessionsChangedListener)
         }
+        instance = null
         clearActiveController()
         super.onDestroy()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_SYNC_FROM_REGISTRY) {
+            mainHandler.post { refreshActiveSession() }
+        }
+        return super.onStartCommand(intent, flags, startId)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -129,6 +147,7 @@ class MediaSessionListenerService : NotificationListenerService() {
         }
 
         activeController?.unregisterCallback(controllerCallback)
+        clearArtworkCache()
         activeController = nextController
         MediaControllerRegistry.updateActiveController(nextController)
 
@@ -145,9 +164,16 @@ class MediaSessionListenerService : NotificationListenerService() {
         publishCurrentState()
     }
 
+    private fun clearArtworkCache() {
+        cachedArtworkKey = ""
+        cachedArtworkBase64 = ""
+        cachedArtworkToken = ""
+    }
+
     private fun publishCurrentState() {
         val controller = activeController
         if (controller == null) {
+            clearArtworkCache()
             MediaStatePublisher.publish(
                 context = this,
                 payload = MediaStatePayload(connectionStatus = MediaConnectionStatus.NO_SESSION),
@@ -158,6 +184,7 @@ class MediaSessionListenerService : NotificationListenerService() {
 
         val metadata = controller.metadata
         val playbackState = controller.playbackState
+        val sessionToken = controller.sessionToken
 
         val controllers = runCatching {
             sessionManager.getActiveSessions(ComponentName(this, javaClass))
@@ -165,32 +192,64 @@ class MediaSessionListenerService : NotificationListenerService() {
         val selectedIndex = controllers.indexOfFirst { it.sessionToken == controller.sessionToken }
             .takeIf { it >= 0 } ?: 0
 
-        val bitmap = metadata?.artworkBitmap()
-        val payload = MediaStatePayload(
-            connectionStatus = MediaConnectionStatus.READY,
-            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
-            artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
-            appName = appNameFor(controller.packageName),
-            appPackageName = controller.packageName,
-            isPlaying = playbackState?.state == PlaybackState.STATE_PLAYING,
-            duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
-            position = playbackState?.position ?: 0L,
-            availableActions = playbackState?.actions ?: 0L,
-            sessionIndex = selectedIndex + 1,
-            sessionCount = controllers.size,
-            artworkToken = bitmap?.let { bmp ->
-                "${controller.packageName}:${metadata.hashCode()}:${bmp.width}x${bmp.height}"
-            }.orEmpty(),
-            artworkBase64 = WearMediaArtworkSync.encode(bitmap),
-        )
+        val artKey = metadata.artworkCacheKey()
+        val gen = ++statePublishGeneration
 
-        MediaStatePublisher.publish(this, payload)
-        schedulePositionUpdates(payload.isPlaying)
+        fun buildPayload(artworkBase64: String, artworkToken: String): MediaStatePayload {
+            val c = activeController ?: controller
+            val md = c.metadata
+            val pb = c.playbackState
+            val ctrls = runCatching {
+                sessionManager.getActiveSessions(ComponentName(this, javaClass))
+            }.getOrElse { emptyList() }
+            val idx = ctrls.indexOfFirst { it.sessionToken == c.sessionToken }.takeIf { it >= 0 } ?: 0
+            return MediaStatePayload(
+                connectionStatus = MediaConnectionStatus.READY,
+                title = md?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
+                artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
+                appName = appNameFor(c.packageName),
+                appPackageName = c.packageName,
+                isPlaying = pb?.state == PlaybackState.STATE_PLAYING,
+                duration = md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
+                position = pb?.position ?: 0L,
+                availableActions = pb?.actions ?: 0L,
+                sessionIndex = idx + 1,
+                sessionCount = ctrls.size,
+                artworkToken = artworkToken,
+                artworkBase64 = artworkBase64,
+            )
+        }
+
+        if (artKey == cachedArtworkKey && artKey.isNotEmpty()) {
+            val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken)
+            MediaStatePublisher.publish(this, payload)
+            schedulePositionUpdates(payload.isPlaying)
+            return
+        }
+
+        artworkDecodeExecutor.execute {
+            val bmp = metadata?.artworkBitmap(applicationContext)
+            val b64 = WearMediaArtworkSync.encode(bmp)
+            val token = bmp?.let { bmpNonNull ->
+                "${controller.packageName}:${metadata.hashCode()}:${bmpNonNull.width}x${bmpNonNull.height}"
+            }.orEmpty()
+            mainHandler.post {
+                if (gen != statePublishGeneration) return@post
+                if (activeController?.sessionToken != sessionToken) return@post
+                cachedArtworkKey = artKey
+                cachedArtworkBase64 = b64
+                cachedArtworkToken = token
+                val payload = buildPayload(b64, token)
+                MediaStatePublisher.publish(this@MediaSessionListenerService, payload)
+                schedulePositionUpdates(payload.isPlaying)
+            }
+        }
     }
 
     private fun clearActiveController() {
         activeController?.unregisterCallback(controllerCallback)
         activeController = null
+        clearArtworkCache()
         MediaControllerRegistry.updateActiveController(null)
         stopPositionUpdates()
     }
@@ -244,5 +303,32 @@ class MediaSessionListenerService : NotificationListenerService() {
     companion object {
         private const val logTag = "MediaSessionBridge"
         private const val POSITION_UPDATE_DELAY_MS = 1_000L
+
+        /** Used when registry session selection changed (wear swipe / phone UI) outside this service. */
+        private const val ACTION_SYNC_FROM_REGISTRY = "se.kvrgic.mediawristremote.phone.ACTION_SYNC_FROM_REGISTRY"
+
+        @Volatile
+        private var instance: MediaSessionListenerService? = null
+
+        /**
+         * Re-applies [MediaControllerRegistry] preferred session to this service’s active controller
+         * and media callbacks. Without this, the watch can show the correct session once, then
+         * periodic publishes from the old (still playing) session overwrite the UI.
+         */
+        fun syncActiveSessionFromRegistry(context: Context) {
+            val svc = instance
+            val app = context.applicationContext
+            if (svc != null) {
+                svc.mainHandler.post { svc.refreshActiveSession() }
+            } else {
+                runCatching {
+                    app.startService(
+                        Intent(app, MediaSessionListenerService::class.java).setAction(ACTION_SYNC_FROM_REGISTRY),
+                    )
+                }.onFailure { error ->
+                    Log.w(logTag, "Could not sync session from registry", error)
+                }
+            }
+        }
     }
 }
