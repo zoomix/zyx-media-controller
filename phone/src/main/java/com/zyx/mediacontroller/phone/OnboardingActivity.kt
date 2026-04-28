@@ -1,6 +1,7 @@
 package se.kvrgic.mediawristremote.phone
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaMetadata
@@ -437,9 +438,11 @@ private fun PhoneApp(
                     Column {
                         Text("Media Wrist Remote", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            text = uiState.appName.ifBlank { "Phone companion" },
+                            text = subtitleForMainTopBar(uiState),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 },
@@ -606,7 +609,9 @@ private fun NowPlayingCard(
             )
             Text(
                 text = if (uiState.hasSession) {
-                    listOf(uiState.artist, uiState.appName).filter { it.isNotBlank() }.joinToString(" - ")
+                    listOf(uiState.sessionArtistSubtitle(), uiState.sessionAppSubtitleLine())
+                        .filter { it.isNotBlank() }
+                        .joinToString(" - ")
                         .ifBlank { "Media session active" }
                 } else {
                     "Start playback in an app on your phone."
@@ -771,13 +776,13 @@ private fun ArtworkHeader(
                             if (uiState.appIcon != null) {
                                 Image(
                                     bitmap = uiState.appIcon.asImageBitmap(),
-                                    contentDescription = "${uiState.appName} icon",
+                                    contentDescription = humanReadableAppLabel(uiState.appName, uiState.appPackageName).ifBlank { "App icon" },
                                     modifier = Modifier.size(72.dp),
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                             }
                             Text(
-                                text = uiState.appName.ifBlank { "Media" },
+                                text = humanReadableAppLabel(uiState.appName, uiState.appPackageName).ifBlank { "Media" },
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center,
@@ -987,6 +992,7 @@ private fun AppControlRow(
     isCurrent: Boolean,
     onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
 ) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -996,8 +1002,11 @@ private fun AppControlRow(
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(app.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Text(app.packageName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        resolvedAppDisplayName(context, app),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
                 if (isCurrent) Text("Now", style = MaterialTheme.typography.labelLarge)
             }
@@ -1042,7 +1051,7 @@ private fun DiagnosticsCard(uiState: PhonePlayerUiState) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Diagnostics", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Selected app: ${uiState.appName.ifBlank { "None" }}")
+            Text("Selected app: ${humanReadableAppLabel(uiState.appName, uiState.appPackageName).ifBlank { "None" }}")
             Text("Package: ${uiState.appPackageName.ifBlank { "None" }}", style = MaterialTheme.typography.bodySmall)
             Text("Session: ${uiState.selectedSessionId.ifBlank { "None" }}", style = MaterialTheme.typography.bodySmall)
             Text("Artwork token: ${uiState.artworkToken.ifBlank { "none" }}", style = MaterialTheme.typography.bodySmall)
@@ -1071,6 +1080,48 @@ private fun DiagnosticsCard(uiState: PhonePlayerUiState) {
             Text(uiState.lastCommandRoute, style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+private fun subtitleForMainTopBar(uiState: PhonePlayerUiState): String {
+    val name = uiState.sessionAppSubtitleLine()
+    return name.ifBlank { "Phone companion" }
+}
+
+private fun PhonePlayerUiState.sessionArtistSubtitle(): String =
+    sanitizeMediaSubtitleField(artist, appPackageName)
+
+private fun PhonePlayerUiState.sessionAppSubtitleLine(): String =
+    humanReadableAppLabel(appName, appPackageName)
+
+private fun humanReadableAppLabel(appName: String, packageName: String): String {
+    val trimmed = appName.trim()
+    if (trimmed.isEmpty()) return ""
+    return if (packageName.isNotEmpty() && trimmed == packageName) "" else trimmed
+}
+
+private fun sanitizeMediaSubtitleField(raw: String?, currentPackageName: String): String {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty()) return ""
+    if (currentPackageName.isNotEmpty() && text.equals(currentPackageName, ignoreCase = false)) return ""
+    if (text.looksLikeJavaPackageIdentifier()) return ""
+    return text
+}
+
+private fun String.looksLikeJavaPackageIdentifier(): Boolean {
+    if (none { it == '.' }) return false
+    return matches(Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$"))
+}
+
+private fun resolvedAppDisplayName(context: Context, app: PlayedApp): String {
+    val fromPm = runCatching {
+        val pm = context.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(app.packageName, 0)).toString().trim()
+    }.getOrNull()
+    if (!fromPm.isNullOrBlank() && fromPm != app.packageName) return fromPm
+    val persisted = app.displayName.trim()
+    if (persisted.isNotEmpty() && persisted != app.packageName) return persisted
+    if (!fromPm.isNullOrBlank()) return fromPm
+    return persisted.ifBlank { app.packageName }
 }
 
 private fun MediaMetadata?.artworkBitmap(): Bitmap? {
