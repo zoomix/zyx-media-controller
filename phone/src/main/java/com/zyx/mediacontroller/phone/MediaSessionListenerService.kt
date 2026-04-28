@@ -61,6 +61,7 @@ class MediaSessionListenerService : NotificationListenerService() {
         }.onFailure { error ->
             Log.w(logTag, "Unable to register active session listener", error)
         }
+        refreshNotificationActions()
         refreshActiveSession()
     }
 
@@ -79,10 +80,12 @@ class MediaSessionListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        refreshNotificationActions()
         refreshActiveSession()
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        refreshNotificationActions()
         refreshActiveSession()
     }
 
@@ -101,6 +104,11 @@ class MediaSessionListenerService : NotificationListenerService() {
         }
 
         selectActiveController(controllers)
+    }
+
+    private fun refreshNotificationActions() {
+        val notifications = runCatching { activeNotifications }.getOrDefault(emptyArray())
+        NotificationActionRegistry.updateFrom(notifications)
     }
 
     private fun selectActiveController(controllers: List<MediaController>) {

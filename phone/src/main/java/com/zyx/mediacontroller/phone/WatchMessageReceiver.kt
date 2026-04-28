@@ -17,7 +17,12 @@ class WatchMessageReceiver : WearableListenerService() {
         val command = MediaCommand.fromPayload(messageEvent.data) ?: return
         val controller = MediaControllerRegistry.activeController ?: activeMediaController() ?: return
 
-        MediaCommandDispatcher.dispatch(controller, command)
+        MediaCommandDispatcher.dispatch(
+            context = this,
+            controller = controller,
+            command = command,
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+        )
     }
 
     private fun activeMediaController(): MediaController? {

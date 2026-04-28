@@ -41,6 +41,12 @@ data class PlayerSessionOption(
     val stateLabel: String,
 )
 
+data class CustomActionDiagnostic(
+    val label: String,
+    val action: String,
+    val extras: String,
+)
+
 data class PhonePlayerUiState(
     val notificationAccessEnabled: Boolean = false,
     val title: String = "",
@@ -54,6 +60,10 @@ data class PhonePlayerUiState(
     val sessionOptions: List<PlayerSessionOption> = emptyList(),
     val selectedSessionId: String = "",
     val isManualSelection: Boolean = false,
+    val standardActionDiagnostics: List<String> = emptyList(),
+    val customActionDiagnostics: List<CustomActionDiagnostic> = emptyList(),
+    val skipButtonMode: SkipButtonMode = SkipButtonMode.SEEK,
+    val lastCommandRoute: String = CommandDiagnostics.lastRoute,
 )
 
 class OnboardingActivity : ComponentActivity() {
@@ -91,6 +101,7 @@ class OnboardingActivity : ComponentActivity() {
                         onSkipNext = ::skipNext,
                         onSelectSession = ::selectSession,
                         onClearPreferredSession = ::clearPreferredSession,
+                        onSetSkipButtonMode = ::setSkipButtonMode,
                     )
                 }
             }
@@ -111,7 +122,10 @@ class OnboardingActivity : ComponentActivity() {
         val notificationAccessEnabled = NotificationAccess.isEnabled(this)
         if (!notificationAccessEnabled) {
             selectController(null)
-            uiState = PhonePlayerUiState(notificationAccessEnabled = false)
+            uiState = PhonePlayerUiState(
+                notificationAccessEnabled = false,
+                skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+            )
             MediaStatePublisher.publish(
                 context = this,
                 payload = MediaStatePayload(connectionStatus = MediaConnectionStatus.PERMISSION_REQUIRED),
@@ -144,17 +158,33 @@ class OnboardingActivity : ComponentActivity() {
 
     private fun togglePlayback() {
         val controller = activeController ?: return
-        MediaCommandDispatcher.dispatch(controller, MediaCommand.TOGGLE, ::refreshState)
+        MediaCommandDispatcher.dispatch(
+            controller = controller,
+            command = MediaCommand.TOGGLE,
+            onStateMayHaveChanged = ::refreshState,
+        )
     }
 
     private fun skipPrevious() {
         val controller = activeController ?: return
-        MediaCommandDispatcher.dispatch(controller, MediaCommand.PREVIOUS, ::refreshState)
+        MediaCommandDispatcher.dispatch(
+            context = this,
+            controller = controller,
+            command = MediaCommand.PREVIOUS,
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+            onStateMayHaveChanged = ::refreshState,
+        )
     }
 
     private fun skipNext() {
         val controller = activeController ?: return
-        MediaCommandDispatcher.dispatch(controller, MediaCommand.NEXT, ::refreshState)
+        MediaCommandDispatcher.dispatch(
+            context = this,
+            controller = controller,
+            command = MediaCommand.NEXT,
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this),
+            onStateMayHaveChanged = ::refreshState,
+        )
     }
 
     private fun selectSession(sessionId: String) {
@@ -169,6 +199,11 @@ class OnboardingActivity : ComponentActivity() {
 
     private fun clearPreferredSession() {
         MediaControllerRegistry.clearPreferredController()
+        refreshState()
+    }
+
+    private fun setSkipButtonMode(mode: SkipButtonMode) {
+        PhoneControlPreferences.setSkipButtonMode(this, mode)
         refreshState()
     }
 
@@ -191,6 +226,7 @@ class OnboardingActivity : ComponentActivity() {
                 notificationAccessEnabled = notificationAccessEnabled,
                 sessionOptions = sessionOptions,
                 isManualSelection = MediaControllerRegistry.hasPreferredController(),
+                skipButtonMode = PhoneControlPreferences.skipButtonMode(this@OnboardingActivity),
             )
         }
 
@@ -209,6 +245,18 @@ class OnboardingActivity : ComponentActivity() {
             sessionOptions = sessionOptions,
             selectedSessionId = sessionId(),
             isManualSelection = MediaControllerRegistry.hasPreferredController(),
+            standardActionDiagnostics = playbackState?.actions.toStandardActionDiagnostics(),
+            customActionDiagnostics = playbackState?.customActions
+                .orEmpty()
+                .map { action ->
+                    CustomActionDiagnostic(
+                        label = action.name?.toString().orEmpty().ifBlank { "(no label)" },
+                        action = action.action,
+                        extras = action.extras.toExtrasSummary(),
+                    )
+                },
+            skipButtonMode = PhoneControlPreferences.skipButtonMode(this@OnboardingActivity),
+            lastCommandRoute = CommandDiagnostics.lastRoute,
         )
     }
 
@@ -292,6 +340,7 @@ private fun PhoneControllerScreen(
     onSkipNext: () -> Unit,
     onSelectSession: (String) -> Unit,
     onClearPreferredSession: () -> Unit,
+    onSetSkipButtonMode: (SkipButtonMode) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -355,6 +404,20 @@ private fun PhoneControllerScreen(
             )
         }
 
+        if (uiState.hasSession) {
+            WatchControlsCard(
+                selectedMode = uiState.skipButtonMode,
+                onSetSkipButtonMode = onSetSkipButtonMode,
+            )
+
+            MediaDiagnosticsCard(
+                rawActions = uiState.availableActions,
+                standardActions = uiState.standardActionDiagnostics,
+                customActions = uiState.customActionDiagnostics,
+                lastCommandRoute = uiState.lastCommandRoute,
+            )
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
@@ -365,7 +428,7 @@ private fun PhoneControllerScreen(
                 enabled = uiState.hasSession,
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Prev")
+                Text(uiState.skipButtonMode.previousButtonLabel)
             }
             Button(
                 onClick = onTogglePlayback,
@@ -379,7 +442,7 @@ private fun PhoneControllerScreen(
                 enabled = uiState.hasSession,
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Next")
+                Text(uiState.skipButtonMode.nextButtonLabel)
             }
         }
 
@@ -517,6 +580,115 @@ private fun SessionOptionRow(
     }
 }
 
+@Composable
+private fun WatchControlsCard(
+    selectedMode: SkipButtonMode,
+    onSetSkipButtonMode: (SkipButtonMode) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "Watch controls",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "Choose what the watch Prev and Next buttons send to the selected session.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            SkipButtonMode.entries.forEach { mode ->
+                Button(
+                    onClick = { onSetSkipButtonMode(mode) },
+                    enabled = mode != selectedMode,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = if (mode == selectedMode) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = if (mode == selectedMode) "${mode.title} selected" else mode.title)
+                        Text(
+                            text = mode.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaDiagnosticsCard(
+    rawActions: Long,
+    standardActions: List<String>,
+    customActions: List<CustomActionDiagnostic>,
+    lastCommandRoute: String,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "Session diagnostics",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "Raw actions: $rawActions",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = "Standard actions: ${standardActions.ifEmpty { listOf("none") }.joinToString()}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = "Last command: $lastCommandRoute",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Text(
+                text = "Custom actions",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            if (customActions.isEmpty()) {
+                Text(
+                    text = "None exposed by this session.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                customActions.forEach { action ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = action.label,
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            text = action.action,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (action.extras.isNotBlank()) {
+                            Text(
+                                text = "Extras: ${action.extras}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun formatTime(milliseconds: Long): String {
     if (milliseconds <= 0L) return "0:00"
     val totalSeconds = milliseconds / 1000L
@@ -534,6 +706,8 @@ private fun actionSummary(actions: Long): String {
         if (actions hasAction PlaybackState.ACTION_PLAY_PAUSE) add("toggle")
         if (actions hasAction PlaybackState.ACTION_SKIP_TO_PREVIOUS) add("prev")
         if (actions hasAction PlaybackState.ACTION_SKIP_TO_NEXT) add("next")
+        if (actions hasAction PlaybackState.ACTION_REWIND) add("rewind")
+        if (actions hasAction PlaybackState.ACTION_FAST_FORWARD) add("fast forward")
         if (actions hasAction PlaybackState.ACTION_SEEK_TO) add("seek")
     }
 
@@ -541,6 +715,77 @@ private fun actionSummary(actions: Long): String {
 }
 
 private infix fun Long.hasAction(action: Long): Boolean = this and action != 0L
+
+private val SkipButtonMode.previousButtonLabel: String
+    get() = when (this) {
+        SkipButtonMode.SEEK -> "Rewind"
+        SkipButtonMode.TRACK -> "Prev"
+    }
+
+private val SkipButtonMode.nextButtonLabel: String
+    get() = when (this) {
+        SkipButtonMode.SEEK -> "Forward"
+        SkipButtonMode.TRACK -> "Next"
+    }
+
+private fun Long?.toStandardActionDiagnostics(): List<String> {
+    val actions = this ?: 0L
+    return buildList {
+        if (actions hasAction PlaybackState.ACTION_STOP) add("STOP (${PlaybackState.ACTION_STOP})")
+        if (actions hasAction PlaybackState.ACTION_PAUSE) add("PAUSE (${PlaybackState.ACTION_PAUSE})")
+        if (actions hasAction PlaybackState.ACTION_PLAY) add("PLAY (${PlaybackState.ACTION_PLAY})")
+        if (actions hasAction PlaybackState.ACTION_REWIND) add("REWIND (${PlaybackState.ACTION_REWIND})")
+        if (actions hasAction PlaybackState.ACTION_SKIP_TO_PREVIOUS) {
+            add("SKIP_TO_PREVIOUS (${PlaybackState.ACTION_SKIP_TO_PREVIOUS})")
+        }
+        if (actions hasAction PlaybackState.ACTION_SKIP_TO_NEXT) {
+            add("SKIP_TO_NEXT (${PlaybackState.ACTION_SKIP_TO_NEXT})")
+        }
+        if (actions hasAction PlaybackState.ACTION_FAST_FORWARD) {
+            add("FAST_FORWARD (${PlaybackState.ACTION_FAST_FORWARD})")
+        }
+        if (actions hasAction PlaybackState.ACTION_SEEK_TO) add("SEEK_TO (${PlaybackState.ACTION_SEEK_TO})")
+        if (actions hasAction PlaybackState.ACTION_PLAY_PAUSE) {
+            add("PLAY_PAUSE (${PlaybackState.ACTION_PLAY_PAUSE})")
+        }
+        if (actions hasAction PlaybackState.ACTION_SET_RATING) {
+            add("SET_RATING (${PlaybackState.ACTION_SET_RATING})")
+        }
+        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_MEDIA_ID) {
+            add("PLAY_FROM_MEDIA_ID (${PlaybackState.ACTION_PLAY_FROM_MEDIA_ID})")
+        }
+        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_SEARCH) {
+            add("PLAY_FROM_SEARCH (${PlaybackState.ACTION_PLAY_FROM_SEARCH})")
+        }
+        if (actions hasAction PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM) {
+            add("SKIP_TO_QUEUE_ITEM (${PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM})")
+        }
+        if (actions hasAction PlaybackState.ACTION_PLAY_FROM_URI) {
+            add("PLAY_FROM_URI (${PlaybackState.ACTION_PLAY_FROM_URI})")
+        }
+        if (actions hasAction PlaybackState.ACTION_PREPARE) add("PREPARE (${PlaybackState.ACTION_PREPARE})")
+        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_MEDIA_ID) {
+            add("PREPARE_FROM_MEDIA_ID (${PlaybackState.ACTION_PREPARE_FROM_MEDIA_ID})")
+        }
+        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_SEARCH) {
+            add("PREPARE_FROM_SEARCH (${PlaybackState.ACTION_PREPARE_FROM_SEARCH})")
+        }
+        if (actions hasAction PlaybackState.ACTION_PREPARE_FROM_URI) {
+            add("PREPARE_FROM_URI (${PlaybackState.ACTION_PREPARE_FROM_URI})")
+        }
+        if (actions hasAction PlaybackState.ACTION_SET_PLAYBACK_SPEED) {
+            add("SET_PLAYBACK_SPEED (${PlaybackState.ACTION_SET_PLAYBACK_SPEED})")
+        }
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun Bundle?.toExtrasSummary(): String {
+    if (this == null || isEmpty) return ""
+    return keySet()
+        .sorted()
+        .joinToString { key -> "$key=${get(key)}" }
+}
 
 private fun Int?.toPlaybackStateLabel(): String {
     return when (this) {
