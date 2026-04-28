@@ -16,22 +16,8 @@ class WatchMessageReceiver : WearableListenerService() {
 
         val command = MediaCommand.fromPayload(messageEvent.data) ?: return
         val controller = MediaControllerRegistry.activeController ?: activeMediaController() ?: return
-        val controls = controller.transportControls
 
-        when (command) {
-            MediaCommand.PLAY -> controls.play()
-            MediaCommand.PAUSE -> controls.pause()
-            MediaCommand.TOGGLE -> {
-                if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) {
-                    controls.pause()
-                } else {
-                    controls.play()
-                }
-            }
-
-            MediaCommand.NEXT -> controls.skipToNext()
-            MediaCommand.PREVIOUS -> controls.skipToPrevious()
-        }
+        MediaCommandDispatcher.dispatch(controller, command)
     }
 
     private fun activeMediaController(): MediaController? {

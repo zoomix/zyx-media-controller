@@ -144,22 +144,17 @@ class OnboardingActivity : ComponentActivity() {
 
     private fun togglePlayback() {
         val controller = activeController ?: return
-        if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) {
-            controller.transportControls.pause()
-        } else {
-            controller.transportControls.play()
-        }
-        refreshState()
+        MediaCommandDispatcher.dispatch(controller, MediaCommand.TOGGLE, ::refreshState)
     }
 
     private fun skipPrevious() {
-        activeController?.transportControls?.skipToPrevious()
-        refreshState()
+        val controller = activeController ?: return
+        MediaCommandDispatcher.dispatch(controller, MediaCommand.PREVIOUS, ::refreshState)
     }
 
     private fun skipNext() {
-        activeController?.transportControls?.skipToNext()
-        refreshState()
+        val controller = activeController ?: return
+        MediaCommandDispatcher.dispatch(controller, MediaCommand.NEXT, ::refreshState)
     }
 
     private fun selectSession(sessionId: String) {
