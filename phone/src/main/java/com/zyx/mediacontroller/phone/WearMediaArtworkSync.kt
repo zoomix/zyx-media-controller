@@ -9,13 +9,13 @@ import java.io.ByteArrayOutputStream
  * Keeps payload within Wear [DataItem] practical limits.
  */
 object WearMediaArtworkSync {
-    private const val MAX_EDGE_PX = 140
+    private const val MAX_EDGE_PX = 320
     private const val JPEG_QUALITY = 72
-    private const val MAX_BASE64_LENGTH = 45_000
+    private const val MAX_BASE64_LENGTH = 100_000
 
     /** Compact tiles for session carousel previews (many sessions in one Wear DataItem payload). */
-    private const val CAROUSEL_MAX_EDGE_PX = 108
-    private const val CAROUSEL_JPEG_QUALITY = 68
+    private const val CAROUSEL_MIN_EDGE_PX = 320
+    private const val CAROUSEL_JPEG_QUALITY = 72
     private const val CAROUSEL_MAX_BASE64_LENGTH = 14_000
 
     fun encode(bitmap: Bitmap?): String {
@@ -36,7 +36,7 @@ object WearMediaArtworkSync {
 
     fun encodeCarouselTile(bitmap: Bitmap?): String {
         if (bitmap == null || bitmap.isRecycled) return ""
-        val scaled = scaleDown(bitmap, CAROUSEL_MAX_EDGE_PX)
+        val scaled = scaleForCarousel(bitmap)
         val bytes = ByteArrayOutputStream().use { out ->
             if (!scaled.compress(Bitmap.CompressFormat.JPEG, CAROUSEL_JPEG_QUALITY, out)) {
                 return ""
@@ -57,6 +57,26 @@ object WearMediaArtworkSync {
         val scale = maxEdge / maxOf(w, h).toFloat()
         val nw = (w * scale).toInt().coerceAtLeast(1)
         val nh = (h * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(source, nw, nh, true)
+    }
+
+    /**
+     * Ensures the bitmap is at least [CAROUSEL_MIN_EDGE_PX] on its longest side.
+     * Scale down if needed, scale up if the source is smaller.
+     */
+    private fun scaleForCarousel(source: Bitmap): Bitmap {
+        val w = source.width
+        val h = source.height
+        val longest = maxOf(w, h)
+        val shortest = minOf(w, h)
+        if (longest >= CAROUSEL_MIN_EDGE_PX && shortest >= CAROUSEL_MIN_EDGE_PX) {
+            // Already meets minimum; scale down if too large
+            return scaleDown(source, CAROUSEL_MIN_EDGE_PX)
+        }
+        // Scale up to at least CAROUSEL_MIN_EDGE_PX on the longest side
+        val scale = CAROUSEL_MIN_EDGE_PX.toFloat() / longest
+        val nw = (w * scale).toInt()
+        val nh = (h * scale).toInt()
         return Bitmap.createScaledBitmap(source, nw, nh, true)
     }
 }
