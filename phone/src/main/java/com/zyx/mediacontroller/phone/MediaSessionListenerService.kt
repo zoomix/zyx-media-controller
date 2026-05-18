@@ -45,14 +45,27 @@ class MediaSessionListenerService : NotificationListenerService() {
         }
     }
 
+    private var lastPublishedPosition = 0L
+    private var lastPublishedMetadataHash = 0
+
     private val positionUpdater = object : Runnable {
         override fun run() {
-            publishCurrentState()
+            if (shouldPublishStateUpdate()) {
+                publishCurrentState()
+            }
             val isPlaying = activeController?.playbackState?.state == PlaybackState.STATE_PLAYING
             if (isPlaying) {
                 mainHandler.postDelayed(this, POSITION_UPDATE_DELAY_MS)
             }
         }
+    }
+
+    private fun shouldPublishStateUpdate(): Boolean {
+        val controller = activeController ?: return false
+        val position = controller.playbackState?.position ?: return false
+        val metadataHash = controller.metadata?.hashCode() ?: 0
+        return (position - lastPublishedPosition).coerceAtLeast(0L) >= POSITION_PUBLISH_THRESHOLD_MS ||
+            metadataHash != lastPublishedMetadataHash
     }
 
     private val activeSessionsChangedListener =
@@ -81,12 +94,14 @@ class MediaSessionListenerService : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        mainHandler.removeCallbacks(notificationDebounceRunnable)
         clearActiveController()
         publishPermissionStateIfNeeded()
         super.onListenerDisconnected()
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(notificationDebounceRunnable)
         runCatching {
             sessionManager.removeOnActiveSessionsChangedListener(activeSessionsChangedListener)
         }
@@ -104,13 +119,20 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         refreshNotificationActions()
-        refreshActiveSession()
+        scheduleActiveSessionRefresh()
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         refreshNotificationActions()
-        refreshActiveSession()
+        scheduleActiveSessionRefresh()
     }
+
+    private fun scheduleActiveSessionRefresh() {
+        mainHandler.removeCallbacks(notificationDebounceRunnable)
+        mainHandler.postDelayed(notificationDebounceRunnable, NOTIFICATION_DEBOUNCE_MS)
+    }
+
+    private val notificationDebounceRunnable = Runnable { refreshActiveSession() }
 
     private fun refreshActiveSession() {
         if (!NotificationAccess.isEnabled(this)) {
@@ -237,6 +259,8 @@ class MediaSessionListenerService : NotificationListenerService() {
 
         if (controllers.size <= 1 && artKey == cachedArtworkKey && artKey.isNotEmpty()) {
             val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken, emptyList())
+            lastPublishedPosition = payload.position
+            lastPublishedMetadataHash = metadata?.hashCode() ?: 0
             MediaStatePublisher.publish(this, payload)
             schedulePositionUpdates(payload.isPlaying)
             return
@@ -249,6 +273,8 @@ class MediaSessionListenerService : NotificationListenerService() {
             artKey.isNotEmpty()
         ) {
             val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken, carouselCacheEntries)
+            lastPublishedPosition = payload.position
+            lastPublishedMetadataHash = metadata?.hashCode() ?: 0
             MediaStatePublisher.publish(this, payload)
             schedulePositionUpdates(payload.isPlaying)
             return
@@ -287,6 +313,8 @@ class MediaSessionListenerService : NotificationListenerService() {
                 cachedArtworkBase64 = b64
                 cachedArtworkToken = token
                 val payload = buildPayload(b64, token, carousel)
+                lastPublishedPosition = payload.position
+                lastPublishedMetadataHash = metadata?.hashCode() ?: 0
                 MediaStatePublisher.publish(this@MediaSessionListenerService, payload)
                 schedulePositionUpdates(payload.isPlaying)
             }
@@ -349,7 +377,9 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     companion object {
         private const val logTag = "MediaSessionBridge"
-        private const val POSITION_UPDATE_DELAY_MS = 1_000L
+        private const val POSITION_UPDATE_DELAY_MS = 5_000L
+        private const val POSITION_PUBLISH_THRESHOLD_MS = 500L
+        private const val NOTIFICATION_DEBOUNCE_MS = 1_000L
 
         /** Used when registry session selection changed (wear swipe / phone UI) outside this service. */
         private const val ACTION_SYNC_FROM_REGISTRY = "se.kvrgic.mediawristremote.phone.ACTION_SYNC_FROM_REGISTRY"
