@@ -1,8 +1,5 @@
 package se.kvrgic.mediawristremote.wear
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -250,13 +247,9 @@ private fun CarouselSessionActiveContent(
         ) { page ->
             val tile = tiles.getOrNull(page)
             val fallbackCurrentSessionPage = sessionIndexStable - 1
-            val artBase64 = tile?.artworkBase64.takeIf { !it.isNullOrBlank() }
-                ?: if (page == fallbackCurrentSessionPage) uiState.artworkBase64 else ""
             val artToken = tile?.artworkToken.takeIf { !it.isNullOrBlank() }
                 ?: if (page == fallbackCurrentSessionPage) uiState.artworkToken else ""
-            val tileBitmap = remember(artToken, artBase64) {
-                decodeWearArtworkJpeg(artBase64)
-            }
+            val tileBitmap = uiState.artwork[artToken]
             if (tileBitmap != null && !tileBitmap.isRecycled) {
                 Image(
                     bitmap = tileBitmap.asImageBitmap(),
@@ -394,9 +387,7 @@ private fun ActivePlayerScreen(
         else -> ""
     }
 
-    val artworkBitmap = remember(uiState.artworkToken, uiState.artworkBase64) {
-        decodeWearArtworkJpeg(uiState.artworkBase64)
-    }
+    val artworkBitmap = uiState.artwork[uiState.artworkToken]
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
@@ -629,12 +620,4 @@ private fun SessionPageDots(
             }
         }
     }
-}
-
-private fun decodeWearArtworkJpeg(base64: String): Bitmap? {
-    if (base64.isBlank()) return null
-    return runCatching {
-        val bytes = Base64.decode(base64, Base64.DEFAULT)
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-    }.getOrNull()?.takeUnless { it.isRecycled }
 }

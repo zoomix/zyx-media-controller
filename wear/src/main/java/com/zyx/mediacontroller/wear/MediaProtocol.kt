@@ -6,6 +6,7 @@ import org.json.JSONObject
 object MediaProtocol {
     const val commandPath = "/media/command"
     const val statePath = "/media/state"
+    const val artworkPath = "/media/artwork"
     const val jsonKey = "json"
 }
 
@@ -47,7 +48,7 @@ data class SessionCarouselEntry(
     val appName: String = "",
     val appPackageName: String = "",
     val artworkToken: String = "",
-    val artworkBase64: String = "",
+    val artworkThumbBase64: String = "",
 )
 
 data class MediaStatePayload(
@@ -63,7 +64,7 @@ data class MediaStatePayload(
     val sessionIndex: Int = 0,
     val sessionCount: Int = 0,
     val artworkToken: String = "",
-    val artworkBase64: String = "",
+    val artworkThumbBase64: String = "",
     val sessionCarousel: List<SessionCarouselEntry> = emptyList(),
 ) {
     companion object {
@@ -80,7 +81,7 @@ data class MediaStatePayload(
                             appName = tile.optString("appName"),
                             appPackageName = tile.optString("appPackageName"),
                             artworkToken = tile.optString("artworkToken"),
-                            artworkBase64 = tile.optString("artworkBase64"),
+                            artworkThumbBase64 = tile.optString("artworkThumb"),
                         ),
                     )
                 }
@@ -100,7 +101,7 @@ data class MediaStatePayload(
                 sessionIndex = payload.optInt("sessionIndex"),
                 sessionCount = payload.optInt("sessionCount"),
                 artworkToken = payload.optString("artworkToken"),
-                artworkBase64 = payload.optString("artworkBase64"),
+                artworkThumbBase64 = payload.optString("artworkThumb"),
                 sessionCarousel = carousel,
             )
         }

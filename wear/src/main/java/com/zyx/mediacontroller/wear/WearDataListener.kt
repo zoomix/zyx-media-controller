@@ -1,6 +1,7 @@
 package se.kvrgic.mediawristremote.wear
 
 import android.content.Context
+import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
@@ -11,6 +12,7 @@ import com.google.android.gms.wearable.Wearable
 class WearDataListener(
     context: Context,
     private val onStateChanged: (MediaStatePayload) -> Unit,
+    private val onArtworkChanged: (Map<String, Asset>) -> Unit,
 ) : DataClient.OnDataChangedListener {
     private val appContext = context.applicationContext
     private val dataClient = Wearable.getDataClient(appContext)
@@ -46,12 +48,20 @@ class WearDataListener(
     }
 
     private fun handleDataItem(dataItem: DataItem) {
-        if (dataItem.uri.path != MediaProtocol.statePath) return
-        val json = DataMapItem.fromDataItem(dataItem)
-            .dataMap
-            .getString(MediaProtocol.jsonKey)
-            ?: return
+        when (dataItem.uri.path) {
+            MediaProtocol.statePath -> {
+                val json = DataMapItem.fromDataItem(dataItem).dataMap.getString(MediaProtocol.jsonKey) ?: return
+                onStateChanged(MediaStatePayload.fromJson(json))
+            }
 
-        onStateChanged(MediaStatePayload.fromJson(json))
+            MediaProtocol.artworkPath -> {
+                val dataMap = DataMapItem.fromDataItem(dataItem).dataMap
+                val assets = HashMap<String, Asset>()
+                for (token in dataMap.keySet()) {
+                    dataMap.getAsset(token)?.let { assets[token] = it }
+                }
+                onArtworkChanged(assets)
+            }
+        }
     }
 }
