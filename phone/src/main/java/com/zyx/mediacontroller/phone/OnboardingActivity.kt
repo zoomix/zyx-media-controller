@@ -195,7 +195,6 @@ class OnboardingActivity : ComponentActivity() {
         val controller = MediaControllerRegistry.preferredControllerFrom(controllers) ?: chooseBestController(controllers)
         selectController(controller)
         uiState = controller.toUiState(notificationAccessEnabled = true, controllers = controllers)
-        MediaStatePublisher.publish(this, controller.toMediaStatePayload(controllers))
     }
 
     private fun activeSessions(): List<MediaController> = runCatching {
@@ -335,36 +334,6 @@ class OnboardingActivity : ComponentActivity() {
             artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
             stateLabel = playbackState?.state.toPlaybackStateLabel(),
             isSelected = sessionId() == selectedId,
-        )
-    }
-
-    private fun MediaController?.toMediaStatePayload(controllers: List<MediaController>): MediaStatePayload {
-        if (this == null) return MediaStatePayload(connectionStatus = MediaConnectionStatus.NO_SESSION)
-        val metadata = metadata
-        val playbackState = playbackState
-        val selectedIndex = controllers.indexOfFirst { it.sessionToken == sessionToken }.takeIf { it >= 0 } ?: 0
-        val artworkBmp = metadata.artworkBitmap(this@OnboardingActivity)
-        val carousel =
-            if (controllers.size > 1) {
-                MediaSessionCarouselBuilder.buildEntries(controllers, this@OnboardingActivity, ::appNameFor)
-            } else {
-                emptyList()
-            }
-        return MediaStatePayload(
-            connectionStatus = MediaConnectionStatus.READY,
-            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
-            artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
-            appName = appNameFor(packageName),
-            appPackageName = packageName,
-            isPlaying = playbackState?.state == PlaybackState.STATE_PLAYING,
-            duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
-            position = playbackState?.position ?: 0L,
-            availableActions = playbackState?.actions ?: 0L,
-            sessionIndex = selectedIndex + 1,
-            sessionCount = controllers.size,
-            artworkToken = artworkBmp?.let { "${packageName}:${metadata?.hashCode()}:${it.width}x${it.height}" }.orEmpty(),
-            artworkBase64 = WearMediaArtworkSync.encode(artworkBmp),
-            sessionCarousel = carousel,
         )
     }
 

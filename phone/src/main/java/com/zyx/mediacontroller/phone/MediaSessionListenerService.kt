@@ -21,15 +21,11 @@ class MediaSessionListenerService : NotificationListenerService() {
     private var activeController: MediaController? = null
 
     private val artworkDecodeExecutor = Executors.newSingleThreadExecutor()
-    private var statePublishGeneration = 0L
-    private var cachedArtworkKey: String = ""
-    private var cachedArtworkBase64: String = ""
-    private var cachedArtworkToken: String = ""
-    private var carouselCacheKey: String = ""
-    private var carouselCacheEntries: List<SessionCarouselEntry> = emptyList()
 
-    private fun List<SessionCarouselEntry>.hasCompleteArtwork(): Boolean =
-        isNotEmpty() && all { it.artworkBase64.isNotBlank() }
+    /** Encoded covers keyed by [artworkCacheId]. Main thread only. */
+    private val artworkCache = HashMap<String, EncodedArtwork>()
+    private val pendingArtworkIds = HashSet<String>()
+    private var lastPublishedArtworkTokens: Set<String>? = null
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) {
@@ -43,14 +39,6 @@ class MediaSessionListenerService : NotificationListenerService() {
         override fun onSessionDestroyed() {
             refreshActiveSession()
         }
-    }
-
-    private var lastPublishedMetadataHash = 0
-
-    private fun shouldPublishStateUpdate(): Boolean {
-        val controller = activeController ?: return false
-        val metadataHash = controller.metadata?.hashCode() ?: 0
-        return metadataHash != lastPublishedMetadataHash
     }
 
     private val activeSessionsChangedListener =
@@ -159,7 +147,6 @@ class MediaSessionListenerService : NotificationListenerService() {
         }
 
         activeController?.unregisterCallback(controllerCallback)
-        clearArtworkCache()
         activeController = nextController
         MediaControllerRegistry.updateActiveController(nextController)
 
@@ -176,18 +163,26 @@ class MediaSessionListenerService : NotificationListenerService() {
     }
 
     private fun clearArtworkCache() {
-        cachedArtworkKey = ""
-        cachedArtworkBase64 = ""
-        cachedArtworkToken = ""
-        carouselCacheKey = ""
-        carouselCacheEntries = emptyList()
+        artworkCache.clear()
     }
 
-    private fun carouselIdentity(controllers: List<MediaController>): String =
-        controllers.joinToString("\u0002") { ctrl ->
-            "${ctrl.sessionToken.hashCode()}\u0001${ctrl.metadata?.artworkCacheKey().orEmpty()}"
-        }
+    private fun activeSessions(): List<MediaController> = runCatching {
+        sessionManager.getActiveSessions(ComponentName(this, javaClass))
+    }.getOrElse { emptyList() }
 
+    private fun artworkCacheId(controller: MediaController): String {
+        val key = controller.metadata.artworkCacheKey()
+        return if (key.isEmpty()) "" else "${controller.packageName}\u0001$key"
+    }
+
+    private fun cachedArtwork(controller: MediaController): EncodedArtwork =
+        artworkCache[artworkCacheId(controller)] ?: EncodedArtwork.NONE
+
+    /**
+     * Publishes text and playback state right away with whatever artwork is already encoded, then encodes
+     * missing covers in the background and republishes as each one lands. The watch therefore shows the
+     * session immediately, a thumbnail shortly after and the full-resolution cover last.
+     */
     private fun publishCurrentState() {
         val controller = activeController
         if (controller == null) {
@@ -199,102 +194,84 @@ class MediaSessionListenerService : NotificationListenerService() {
             return
         }
 
+        val controllers = activeSessions()
+        // Active session first so its cover is encoded before the carousel tiles.
+        val artworkControllers = (listOf(controller) + if (controllers.size > 1) controllers else emptyList()).distinctBy { it.sessionToken }
+        val neededIds = HashSet<String>()
+        for (ctrl in artworkControllers) {
+            val id = artworkCacheId(ctrl)
+            if (id.isNotEmpty()) neededIds.add(id)
+        }
+        artworkCache.keys.retainAll(neededIds)
+        for (ctrl in artworkControllers) {
+            requestArtwork(ctrl)
+        }
+
         val metadata = controller.metadata
-        val sessionToken = controller.sessionToken
-
-        val controllers = runCatching {
-            sessionManager.getActiveSessions(ComponentName(this, javaClass))
-        }.getOrElse { emptyList() }
-        val artKey = metadata.artworkCacheKey()
-        val gen = ++statePublishGeneration
-        val carKey = carouselIdentity(controllers)
-
-        fun buildPayload(
-            artworkBase64: String,
-            artworkToken: String,
-            sessionCarousel: List<SessionCarouselEntry>,
-        ): MediaStatePayload {
-            val c = activeController ?: controller
-            val md = c.metadata
-            val pb = c.playbackState
-            val ctrls = runCatching {
-                sessionManager.getActiveSessions(ComponentName(this, javaClass))
-            }.getOrElse { emptyList() }
-            val idx = ctrls.indexOfFirst { it.sessionToken == c.sessionToken }.takeIf { it >= 0 } ?: 0
-            return MediaStatePayload(
+        val playback = controller.playbackState
+        val activeArt = cachedArtwork(controller)
+        val sessionIndex = controllers.indexOfFirst { it.sessionToken == controller.sessionToken }.takeIf { it >= 0 } ?: 0
+        val carousel = if (controllers.size > 1) controllers.map(::carouselEntry) else emptyList()
+        MediaStatePublisher.publish(
+            context = this,
+            payload = MediaStatePayload(
                 connectionStatus = MediaConnectionStatus.READY,
-                title = md?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
-                artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
-                appName = appNameFor(c.packageName),
-                appPackageName = c.packageName,
-                isPlaying = pb?.state == PlaybackState.STATE_PLAYING,
-                duration = md?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
-                position = pb?.position ?: 0L,
-                availableActions = pb?.actions ?: 0L,
-                sessionIndex = idx + 1,
-                sessionCount = ctrls.size,
-                artworkToken = artworkToken,
-                artworkBase64 = artworkBase64,
-                sessionCarousel = sessionCarousel,
-            )
-        }
+                title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
+                artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
+                appName = appNameFor(controller.packageName),
+                appPackageName = controller.packageName,
+                isPlaying = playback?.state == PlaybackState.STATE_PLAYING,
+                duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L,
+                position = playback?.position ?: 0L,
+                availableActions = playback?.actions ?: 0L,
+                sessionIndex = sessionIndex + 1,
+                sessionCount = controllers.size,
+                artworkToken = activeArt.token,
+                artworkThumbBase64 = activeArt.thumbBase64,
+                sessionCarousel = carousel,
+            ),
+        )
+        publishArtworkAssetsIfChanged()
+    }
 
-        if (controllers.size <= 1 && artKey == cachedArtworkKey && artKey.isNotEmpty()) {
-            val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken, emptyList())
-            lastPublishedMetadataHash = metadata?.hashCode() ?: 0
-            MediaStatePublisher.publish(this, payload)
-            return
-        }
+    private fun carouselEntry(controller: MediaController): SessionCarouselEntry {
+        val metadata = controller.metadata
+        val art = cachedArtwork(controller)
+        return SessionCarouselEntry(
+            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty(),
+            artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty(),
+            appName = appNameFor(controller.packageName),
+            appPackageName = controller.packageName,
+            artworkToken = art.token,
+            artworkThumbBase64 = art.thumbBase64,
+        )
+    }
 
-        if (controllers.size > 1 &&
-            carKey == carouselCacheKey &&
-            carouselCacheEntries.hasCompleteArtwork() &&
-            artKey == cachedArtworkKey &&
-            artKey.isNotEmpty()
-        ) {
-            val payload = buildPayload(cachedArtworkBase64, cachedArtworkToken, carouselCacheEntries)
-            lastPublishedMetadataHash = metadata?.hashCode() ?: 0
-            MediaStatePublisher.publish(this, payload)
-            return
-        }
-
+    private fun requestArtwork(controller: MediaController) {
+        val id = artworkCacheId(controller)
+        if (id.isEmpty() || id in artworkCache || id in pendingArtworkIds) return
+        pendingArtworkIds.add(id)
+        val metadata = controller.metadata
+        val token = "${controller.packageName}:${Integer.toHexString(id.hashCode())}"
         artworkDecodeExecutor.execute {
-            val ctrlsSnapshot = controllers
-            val carKeySnapshot = carouselIdentity(ctrlsSnapshot)
-            val carousel: List<SessionCarouselEntry> = if (ctrlsSnapshot.size <= 1) {
-                emptyList()
-            } else if (
-                carKeySnapshot == carouselCacheKey &&
-                carouselCacheEntries.hasCompleteArtwork()
-            ) {
-                carouselCacheEntries
-            } else {
-                MediaSessionCarouselBuilder.buildEntries(
-                    ctrlsSnapshot,
-                    applicationContext,
-                    ::appNameFor,
-                ).also { built ->
-                    carouselCacheKey = carKeySnapshot
-                    carouselCacheEntries = built
-                }
-            }
-
-            val bmp = metadata?.artworkBitmap(applicationContext)
-            val b64 = WearMediaArtworkSync.encode(bmp)
-            val token = bmp?.let { bmpNonNull ->
-                "${controller.packageName}:${metadata.hashCode()}:${bmpNonNull.width}x${bmpNonNull.height}"
-            }.orEmpty()
+            val encoded = WearMediaArtworkSync.encode(metadata?.artworkBitmap(applicationContext), token)
             mainHandler.post {
-                if (gen != statePublishGeneration) return@post
-                if (activeController?.sessionToken != sessionToken) return@post
-                cachedArtworkKey = artKey
-                cachedArtworkBase64 = b64
-                cachedArtworkToken = token
-                val payload = buildPayload(b64, token, carousel)
-                lastPublishedMetadataHash = metadata?.hashCode() ?: 0
-                MediaStatePublisher.publish(this@MediaSessionListenerService, payload)
+                pendingArtworkIds.remove(id)
+                artworkCache[id] = encoded
+                if (activeController != null) publishCurrentState()
             }
         }
+    }
+
+    /** The asset item only changes when the set of covers does, so playback updates never resend image bytes. */
+    private fun publishArtworkAssetsIfChanged() {
+        val jpegByToken = HashMap<String, ByteArray>()
+        for (art in artworkCache.values) {
+            if (art.token.isNotEmpty() && art.fullJpeg.isNotEmpty()) jpegByToken[art.token] = art.fullJpeg
+        }
+        if (jpegByToken.keys == lastPublishedArtworkTokens) return
+        lastPublishedArtworkTokens = jpegByToken.keys.toSet()
+        MediaStatePublisher.publishArtwork(this, jpegByToken)
     }
 
     private fun clearActiveController() {

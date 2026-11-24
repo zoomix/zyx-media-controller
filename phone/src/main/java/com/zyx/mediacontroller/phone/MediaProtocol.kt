@@ -6,6 +6,7 @@ import org.json.JSONObject
 object MediaProtocol {
     const val commandPath = "/media/command"
     const val statePath = "/media/state"
+    const val artworkPath = "/media/artwork"
     const val jsonKey = "json"
     const val updatedAtKey = "updatedAt"
 }
@@ -55,7 +56,7 @@ data class SessionCarouselEntry(
     val appName: String = "",
     val appPackageName: String = "",
     val artworkToken: String = "",
-    val artworkBase64: String = "",
+    val artworkThumbBase64: String = "",
 ) {
     fun toJsonObject(): JSONObject =
         JSONObject()
@@ -64,7 +65,7 @@ data class SessionCarouselEntry(
             .put("appName", appName)
             .put("appPackageName", appPackageName)
             .put("artworkToken", artworkToken)
-            .put("artworkBase64", artworkBase64)
+            .put("artworkThumb", artworkThumbBase64)
 }
 
 data class MediaStatePayload(
@@ -79,9 +80,10 @@ data class MediaStatePayload(
     val availableActions: Long = 0L,
     val sessionIndex: Int = 0,
     val sessionCount: Int = 0,
+    /** Key of the full-resolution cover in the [MediaProtocol.artworkPath] item; empty if no artwork. */
     val artworkToken: String = "",
-    /** JPEG (Base64) for watch cover art; empty if too large or unavailable. */
-    val artworkBase64: String = "",
+    /** Tiny JPEG (Base64) shown until the full-resolution asset has loaded. */
+    val artworkThumbBase64: String = "",
     /** One entry per active session for wear carousel previews (aligned with active session ordering). */
     val sessionCarousel: List<SessionCarouselEntry> = emptyList(),
 ) {
@@ -102,7 +104,7 @@ data class MediaStatePayload(
             .put("sessionIndex", sessionIndex)
             .put("sessionCount", sessionCount)
             .put("artworkToken", artworkToken)
-            .put("artworkBase64", artworkBase64)
+            .put("artworkThumb", artworkThumbBase64)
             .put("sessionCarousel", carouselArr)
             .toString()
     }

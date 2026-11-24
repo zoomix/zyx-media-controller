@@ -5,78 +5,50 @@ import android.util.Base64
 import java.io.ByteArrayOutputStream
 
 /**
- * Encodes artwork as JPEG + Base64 for [MediaStatePayload] so the watch can show cover art.
- * Keeps payload within Wear [DataItem] practical limits.
+ * Two renditions of one cover. The thumbnail rides inline in [MediaStatePayload] so the watch can paint
+ * something immediately; the full JPEG goes out as a Wear Asset (deduplicated by content, so it is only
+ * transferred once per cover rather than on every playback state change).
  */
+class EncodedArtwork(val token: String, val thumbBase64: String, val fullJpeg: ByteArray) {
+    companion object {
+        val NONE = EncodedArtwork("", "", ByteArray(0))
+    }
+}
+
 object WearMediaArtworkSync {
-    private const val MAX_EDGE_PX = 320
-    private const val JPEG_QUALITY = 72
-    private const val MAX_BASE64_LENGTH = 100_000
+    /** Carousel tiles and the main backdrop share this rendition; kept at 320 so small covers are scaled up (see 33bd01b). */
+    private const val FULL_EDGE_PX = 320
+    private const val FULL_JPEG_QUALITY = 72
 
-    /** Compact tiles for session carousel previews (many sessions in one Wear DataItem payload). */
-    private const val CAROUSEL_MIN_EDGE_PX = 320
-    private const val CAROUSEL_JPEG_QUALITY = 72
-    private const val CAROUSEL_MAX_BASE64_LENGTH = 14_000
+    private const val THUMB_EDGE_PX = 64
+    private const val THUMB_JPEG_QUALITY = 60
 
-    fun encode(bitmap: Bitmap?): String {
-        if (bitmap == null || bitmap.isRecycled) return ""
-        val scaled = scaleDown(bitmap, MAX_EDGE_PX)
+    fun encode(bitmap: Bitmap?, token: String): EncodedArtwork {
+        if (bitmap == null || bitmap.isRecycled) return EncodedArtwork.NONE
+        val full = compressScaled(bitmap, FULL_EDGE_PX, FULL_JPEG_QUALITY) ?: return EncodedArtwork.NONE
+        val thumb = compressScaled(bitmap, THUMB_EDGE_PX, THUMB_JPEG_QUALITY) ?: ByteArray(0)
+        return EncodedArtwork(token, Base64.encodeToString(thumb, Base64.NO_WRAP), full)
+    }
+
+    private fun compressScaled(source: Bitmap, edge: Int, quality: Int): ByteArray? {
+        val scaled = scaleLongestEdgeTo(source, edge)
         val bytes = ByteArrayOutputStream().use { out ->
-            if (!scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) {
-                return ""
-            }
-            out.toByteArray()
+            if (!scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)) null else out.toByteArray()
         }
-        if (scaled !== bitmap) {
+        if (scaled !== source) {
             scaled.recycle()
         }
-        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-        return if (b64.length <= MAX_BASE64_LENGTH) b64 else ""
+        return bytes
     }
 
-    fun encodeCarouselTile(bitmap: Bitmap?): String {
-        if (bitmap == null || bitmap.isRecycled) return ""
-        val scaled = scaleForCarousel(bitmap)
-        val bytes = ByteArrayOutputStream().use { out ->
-            if (!scaled.compress(Bitmap.CompressFormat.JPEG, CAROUSEL_JPEG_QUALITY, out)) {
-                return ""
-            }
-            out.toByteArray()
-        }
-        if (scaled !== bitmap) {
-            scaled.recycle()
-        }
-        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-        return if (b64.length <= CAROUSEL_MAX_BASE64_LENGTH) b64 else ""
-    }
-
-    private fun scaleDown(source: Bitmap, maxEdge: Int): Bitmap {
-        val w = source.width
-        val h = source.height
-        if (w <= maxEdge && h <= maxEdge) return source
-        val scale = maxEdge / maxOf(w, h).toFloat()
-        val nw = (w * scale).toInt().coerceAtLeast(1)
-        val nh = (h * scale).toInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(source, nw, nh, true)
-    }
-
-    /**
-     * Ensures the bitmap is at least [CAROUSEL_MIN_EDGE_PX] on its longest side.
-     * Scale down if needed, scale up if the source is smaller.
-     */
-    private fun scaleForCarousel(source: Bitmap): Bitmap {
+    private fun scaleLongestEdgeTo(source: Bitmap, edge: Int): Bitmap {
         val w = source.width
         val h = source.height
         val longest = maxOf(w, h)
-        val shortest = minOf(w, h)
-        if (longest >= CAROUSEL_MIN_EDGE_PX && shortest >= CAROUSEL_MIN_EDGE_PX) {
-            // Already meets minimum; scale down if too large
-            return scaleDown(source, CAROUSEL_MIN_EDGE_PX)
-        }
-        // Scale up to at least CAROUSEL_MIN_EDGE_PX on the longest side
-        val scale = CAROUSEL_MIN_EDGE_PX.toFloat() / longest
-        val nw = (w * scale).toInt()
-        val nh = (h * scale).toInt()
+        if (longest == edge) return source
+        val scale = edge / longest.toFloat()
+        val nw = (w * scale).toInt().coerceAtLeast(1)
+        val nh = (h * scale).toInt().coerceAtLeast(1)
         return Bitmap.createScaledBitmap(source, nw, nh, true)
     }
 }
