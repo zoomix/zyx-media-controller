@@ -43,7 +43,7 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     private val activeSessionsChangedListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-            selectActiveController(controllers ?: emptyList())
+            selectActiveController(controllers.orEmpty().visibleOnWatch(this))
         }
 
     override fun onCreate() {
@@ -121,7 +121,7 @@ class MediaSessionListenerService : NotificationListenerService() {
             emptyList()
         }
 
-        selectActiveController(controllers)
+        selectActiveController(controllers.visibleOnWatch(this))
         controllers.forEach { controller ->
             PhoneControlPreferences.rememberPlayedApp(
                 context = this,
@@ -168,7 +168,7 @@ class MediaSessionListenerService : NotificationListenerService() {
 
     private fun activeSessions(): List<MediaController> = runCatching {
         sessionManager.getActiveSessions(ComponentName(this, javaClass))
-    }.getOrElse { emptyList() }
+    }.getOrElse { emptyList() }.visibleOnWatch(this)
 
     private fun artworkCacheId(controller: MediaController): String {
         val key = controller.metadata.artworkCacheKey()

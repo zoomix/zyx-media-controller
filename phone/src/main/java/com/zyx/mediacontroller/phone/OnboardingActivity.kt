@@ -57,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -153,6 +154,7 @@ class OnboardingActivity : ComponentActivity() {
                     onSelectSession = ::selectSession,
                     onClearPreferredSession = ::clearPreferredSession,
                     onSetSkipButtonMode = ::setSkipButtonMode,
+                    onSetHiddenOnWatch = ::setHiddenOnWatch,
                 )
             }
         }
@@ -248,6 +250,12 @@ class OnboardingActivity : ComponentActivity() {
 
     private fun setSkipButtonMode(packageName: String?, mode: SkipButtonMode) {
         PhoneControlPreferences.setSkipButtonMode(this, packageName ?: activeController?.packageName, mode)
+        refreshState()
+    }
+
+    private fun setHiddenOnWatch(packageName: String, hidden: Boolean) {
+        PhoneControlPreferences.setHiddenOnWatch(this, packageName, hidden)
+        MediaSessionListenerService.syncActiveSessionFromRegistry(this)
         refreshState()
     }
 
@@ -412,6 +420,7 @@ private fun PhoneApp(
     onSelectSession: (String) -> Unit,
     onClearPreferredSession: () -> Unit,
     onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
+    onSetHiddenOnWatch: (String, Boolean) -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -486,6 +495,7 @@ private fun PhoneApp(
             PhoneScreen.APP_CONTROLS -> AppControlsScreen(
                 uiState = uiState,
                 onSetSkipButtonMode = onSetSkipButtonMode,
+                onSetHiddenOnWatch = onSetHiddenOnWatch,
                 modifier = Modifier.padding(padding),
             )
             PhoneScreen.DIAGNOSTICS -> DiagnosticsScreen(uiState = uiState, modifier = Modifier.padding(padding))
@@ -542,6 +552,7 @@ private fun PermissionCard(notificationAccessEnabled: Boolean, onOpenSettings: (
 private fun AppControlsScreen(
     uiState: PhonePlayerUiState,
     onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
+    onSetHiddenOnWatch: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -555,6 +566,7 @@ private fun AppControlsScreen(
             playedApps = uiState.playedApps,
             currentPackageName = uiState.appPackageName,
             onSetSkipButtonMode = onSetSkipButtonMode,
+            onSetHiddenOnWatch = onSetHiddenOnWatch,
         )
     }
 }
@@ -999,12 +1011,13 @@ private fun PerAppControlsCard(
     playedApps: List<PlayedApp>,
     currentPackageName: String,
     onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
+    onSetHiddenOnWatch: (String, Boolean) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Per-app watch controls", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(
-                "Choose what the watch Prev and Next buttons do for each media app. Routing stays on the phone.",
+                "Choose what the watch Prev and Next buttons do for each media app, or hide an app from the watch entirely. Routing stays on the phone.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1012,7 +1025,7 @@ private fun PerAppControlsCard(
                 Text("Apps will appear here after they play media.")
             } else {
                 playedApps.forEach { app ->
-                    AppControlRow(app, app.packageName == currentPackageName, onSetSkipButtonMode)
+                    AppControlRow(app, app.packageName == currentPackageName, onSetSkipButtonMode, onSetHiddenOnWatch)
                 }
             }
         }
@@ -1024,6 +1037,7 @@ private fun AppControlRow(
     app: PlayedApp,
     isCurrent: Boolean,
     onSetSkipButtonMode: (String?, SkipButtonMode) -> Unit,
+    onSetHiddenOnWatch: (String, Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     Card(
@@ -1040,8 +1054,20 @@ private fun AppControlRow(
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                     )
+                    Text(
+                        app.packageName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 if (isCurrent) Text("Now", style = MaterialTheme.typography.labelLarge)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Show on watch", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = !app.hiddenOnWatch,
+                    onCheckedChange = { show -> onSetHiddenOnWatch(app.packageName, !show) },
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SkipButtonMode.entries.forEach { mode ->

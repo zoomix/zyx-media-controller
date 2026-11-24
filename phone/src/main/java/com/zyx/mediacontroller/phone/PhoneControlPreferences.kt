@@ -24,6 +24,7 @@ data class PlayedApp(
     val lastSeenAt: Long,
     val skipButtonMode: SkipButtonMode,
     val observedActions: Long = 0L,
+    val hiddenOnWatch: Boolean = false,
 )
 
 object PhoneControlPreferences {
@@ -31,6 +32,19 @@ object PhoneControlPreferences {
     private const val LEGACY_SKIP_BUTTON_MODE_KEY = "skip_button_mode"
     private const val APPS_KEY = "played_apps"
     private const val MODE_PREFIX = "skip_button_mode:"
+    private const val HIDDEN_ON_WATCH_KEY = "hidden_on_watch_packages"
+
+    fun hiddenOnWatchPackages(context: Context): Set<String> =
+        context.preferences().getStringSet(HIDDEN_ON_WATCH_KEY, null).orEmpty()
+
+    fun setHiddenOnWatch(context: Context, packageName: String, hidden: Boolean) {
+        if (packageName.isBlank()) return
+        val updated = if (hidden) hiddenOnWatchPackages(context) + packageName else hiddenOnWatchPackages(context) - packageName
+        context.preferences()
+            .edit()
+            .putStringSet(HIDDEN_ON_WATCH_KEY, updated)
+            .apply()
+    }
 
     fun skipButtonMode(context: Context, packageName: String?): SkipButtonMode {
         if (packageName.isNullOrBlank()) return legacyMode(context)
@@ -89,6 +103,7 @@ object PhoneControlPreferences {
 
     fun playedApps(context: Context): List<PlayedApp> {
         val rawValue = context.preferences().getString(APPS_KEY, null) ?: return emptyList()
+        val hidden = hiddenOnWatchPackages(context)
         return runCatching {
             val array = JSONArray(rawValue)
             List(array.length()) { index ->
@@ -102,6 +117,7 @@ object PhoneControlPreferences {
                         .let { value -> SkipButtonMode.entries.firstOrNull { it.name == value } }
                         ?: legacyMode(context),
                     observedActions = item.optLong("observedActions"),
+                    hiddenOnWatch = packageName in hidden,
                 )
             }.filter { it.packageName.isNotBlank() }
         }.getOrDefault(emptyList())

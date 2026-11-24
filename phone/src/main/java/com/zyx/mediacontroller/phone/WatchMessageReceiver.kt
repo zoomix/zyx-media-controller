@@ -33,7 +33,8 @@ class WatchMessageReceiver : WearableListenerService() {
                 MediaControllerRegistry.selectPreviousController(controllers)
             }
 
-            else -> MediaControllerRegistry.activeController ?: activeMediaController(controllers)
+            else -> MediaControllerRegistry.activeController?.takeIf { active -> controllers.any { it.sessionToken == active.sessionToken } }
+                ?: activeMediaController(controllers)
         } ?: return
 
         if (command == MediaCommand.SELECT_NEXT_SESSION || command == MediaCommand.SELECT_PREVIOUS_SESSION) {
@@ -57,7 +58,7 @@ class WatchMessageReceiver : WearableListenerService() {
         val sessionManager = getSystemService(MediaSessionManager::class.java)
         return runCatching {
             sessionManager.getActiveSessions(ComponentName(this, MediaSessionListenerService::class.java))
-        }.getOrDefault(emptyList())
+        }.getOrDefault(emptyList()).visibleOnWatch(this)
     }
 
     private fun activeMediaController(controllers: List<MediaController> = activeMediaControllers()): MediaController? {

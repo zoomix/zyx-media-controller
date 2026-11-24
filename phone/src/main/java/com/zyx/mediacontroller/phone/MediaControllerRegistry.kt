@@ -1,7 +1,15 @@
 package se.kvrgic.mediawristremote.phone
 
+import android.content.Context
 import android.media.session.MediaController
 import android.media.session.MediaSession
+
+/** Sessions the watch may see and control; apps the user hid in the phone app are left out entirely. */
+fun List<MediaController>.visibleOnWatch(context: Context): List<MediaController> {
+    val hidden = PhoneControlPreferences.hiddenOnWatchPackages(context)
+    if (hidden.isEmpty()) return this
+    return filterNot { it.packageName in hidden }
+}
 
 object MediaControllerRegistry {
     private val lock = Any()
